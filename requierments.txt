@@ -1,0 +1,5 @@
+flask==2.3.3
+ultralytics==8.0 # install the latest ultralytics; replace with exact version if needed
+opencv-python-headless==4.8.0.74
+Pillow==10.0.0
+torch      # install a torch build appropriate for your environment (CPU or CUDA)
