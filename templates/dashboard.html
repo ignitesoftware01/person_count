@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            background: #f3f3f3;
+        }
+
+        .topbar {
+            background: #222;
+            color: #fff;
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            background: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+
+        .btn:hover {
+            background: #0056b3;
+        }
+
+        #video-container {
+            width: 900px;
+            margin: 20px auto;
+            transition: all 0.3s ease;
+        }
+
+        #video-frame {
+            width: 100%;
+            border-radius: 10px;
+            border: 3px solid #444;
+        }
+
+        /* FULL SCREEN MODE */
+        .fullscreen {
+            width: 100vw !important;
+            height: 100vh !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="topbar">
+        <h2>Person Detection Dashboard</h2>
+        <button onclick="window.location='/logout'" class="btn">Logout</button>
+    </div>
+
+    <div style="text-align:center; margin-top:20px;">
+        <button class="btn" onclick="toggleSize()">Toggle Fullscreen</button>
+        <h3>Live Person Count: <span id="count">0</span></h3>
+    </div>
+
+    <div id="video-container">
+        <img id="video-frame" src="/video">
+    </div>
+
+    <script>
+        function toggleSize() {
+            let box = document.getElementById("video-container");
+            box.classList.toggle("fullscreen");
+        }
+
+        // Person count updater
+        setInterval(() => {
+            fetch("/count")
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById("count").innerText = data.persons;
+                });
+        }, 1000);
+    </script>
+</body>
+</html>
