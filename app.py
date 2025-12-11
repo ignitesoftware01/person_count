@@ -106,8 +106,7 @@ print(f"Using camera index {camera_index} backend {camera_backend}")
 # ---------------- PERSON-ONLY SAFE INFERENCE ----------------
 def safe_infer_and_annotate(frame):
     try:
-        # 👇 FORCE YOLO TO DETECT ONLY PERSON (class 0)
-        results = model(frame, imgsz=IMG_SIZE, classes=[0])
+        results = model(frame, imgsz=IMG_SIZE, classes=[0])  # only persons
         r = results[0]
     except:
         return None, 0
@@ -121,7 +120,6 @@ def safe_infer_and_annotate(frame):
     person_count = 0
     annotated = frame.copy()
 
-    # Draw ONLY PERSONS
     for box, cls in zip(xyxy_vals, cls_vals):
         if cls == 0:
             x1, y1, x2, y2 = box.astype(int)
@@ -212,7 +210,16 @@ def video_feed():
 def count():
     with frame_lock:
         cnt = latest_person_count
-    return jsonify({"persons": cnt, "timestamp": int(time.time())})
+
+    # -------- ALERT TRIGGER (ADDED ONLY THIS) --------
+    alert_flag = True if cnt > 5 else False
+    # -------------------------------------------------
+
+    return jsonify({
+        "persons": cnt,
+        "alert": alert_flag,
+        "timestamp": int(time.time())
+    })
 
 @app.route("/snapshot")
 @login_required
