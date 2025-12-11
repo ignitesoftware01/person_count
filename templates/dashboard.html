@@ -12,6 +12,13 @@
     .header-right{display:flex;align-items:center;gap:10px}
     #videoWrap{background:#000;border-radius:8px;overflow:hidden;height:540px;display:flex;justify-content:center;align-items:center;position:relative;transition:all .25s ease}
     #stream{width:100%;height:100%;object-fit:cover;display:block}
+    /* canvas sits on top of image */
+    #overlay {
+      position: absolute;
+      left: 0;
+      top: 0;
+      pointer-events: none; /* clicks pass through */
+    }
     .controls{display:flex;gap:12px;align-items:center;margin-top:10px}
     .countBox{background:#fff;padding:12px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.08)}
     .btn{padding:8px 12px;border-radius:8px;border:none;cursor:pointer;background:#1f6feb;color:#fff}
@@ -22,7 +29,6 @@
     .modal.show{display:flex}
     .modal-card{background:#fff;padding:20px;border-radius:8px;max-width:420px;text-align:center}
     .modal-card h2{margin:0 0 8px}
-
     /* Mini mode */
     .mini {
       position: fixed !important;
@@ -35,8 +41,6 @@
       box-shadow: 0 12px 40px rgba(2,6,23,0.35);
       transform: translateZ(0);
     }
-
-    /* Full fallback overlay mode (non-Fullscreen API) */
     .overlay-full {
       position: fixed !important;
       left: 0 !important;
@@ -46,12 +50,19 @@
       z-index: 9997;
       border-radius: 0 !important;
     }
-
-    /* Small responsive adjustments */
     @media (max-width:980px){
       #videoWrap{height:360px}
       .mini{width:220px;height:140px}
     }
+
+    /* little badge/table for people (optional) */
+    .people-table {
+      margin-top:10px;
+      background:#fff;padding:10px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.06);
+      font-size:13px;
+    }
+    .people-table table { width:100%; border-collapse:collapse; }
+    .people-table th, .people-table td { text-align:left; padding:6px 8px; border-bottom:1px solid #f0f0f0; }
   </style>
 </head>
 <body>
@@ -73,11 +84,23 @@
 
     <section id="main">
       <div id="videoWrap" aria-live="polite">
+        <!-- live mjpeg stream -->
         <img id="stream" src="{{ url_for('video_feed') }}" alt="Live stream">
+        <!-- overlay canvas - will be resized to match stream -->
+        <canvas id="overlay"></canvas>
       </div>
 
       <div class="controls">
         <div class="countBox">Persons detected: <strong id="count">0</strong></div>
+      </div>
+
+      <!-- Optional: small table to show per-person stats -->
+      <div class="people-table" id="peopleTable" style="display:none">
+        <strong>Live people</strong>
+        <table>
+          <thead><tr><th>ID</th><th>Speed (px/s)</th><th>Direction</th><th>Centroid</th></tr></thead>
+          <tbody id="peopleBody"></tbody>
+        </table>
       </div>
     </section>
   </div>
@@ -99,62 +122,194 @@
   </audio>
 
   <script>
-    // Poll backend count endpoint and show popup when alert==true
-    let alertShown = false;
-    const cooldownMs = 20000; // 20s before showing alert again
-    let lastAlertTs = 0;
+    // === CONFIG ===
+    // IMPORTANT: these should match your camera capture resolution in app.py
+    // If you change cap.set(...) in app.py, update these values accordingly.
+    const FRAME_W = 1280;
+    const FRAME_H = 720;
 
-    function updateCountAndAlert() {
-      fetch('/count').then(r => {
-        if (!r.ok) throw new Error('count fetch failed');
-        return r.json();
-      }).then(data => {
-        // update count UI
-        const cntEl = document.getElementById('count');
-        if(cntEl) cntEl.innerText = data.persons;
+    // Polling interval (ms)
+    const POLL_MS = 500;
 
-        // handle alert
-        if (data.alert) {
-          const now = Date.now();
-          if (!alertShown && (now - lastAlertTs) > cooldownMs) {
-            // show modal
-            alertShown = true;
-            lastAlertTs = now;
-            document.getElementById('alertModal').classList.add('show');
-            // play sound if available
-            const s = document.getElementById('alertSound');
-            if (s) {
-              s.currentTime = 0;
-              s.play().catch(()=>{/* ignore play errors */});
-            }
-          }
-        }
-      }).catch(err => {
-        // console.log('count poll error', err);
-      });
-    }
+    // overlay & stream elements
+    const img = document.getElementById('stream');
+    const canvas = document.getElementById('overlay');
+    const ctx = canvas.getContext('2d');
 
-    // dismiss modal
-    document.getElementById('dismissBtn').addEventListener('click', () => {
-      document.getElementById('alertModal').classList.remove('show');
-      alertShown = false;
-      // do not allow immediate re-alert; cooldown handled by lastAlertTs
-    });
+    // UI elements
+    const countEl = document.getElementById('count');
+    const peopleTable = document.getElementById('peopleTable');
+    const peopleBody = document.getElementById('peopleBody');
 
-    // start polling
-    setInterval(updateCountAndAlert, 1000);
-    updateCountAndAlert();
-
-    // ---------------- Full / Mini screen logic ----------------
+    // Full/Mini controls (keeps existing behavior)
     const videoWrap = document.getElementById('videoWrap');
     const fullBtn = document.getElementById('fullBtn');
     const minBtn = document.getElementById('minBtn');
     let isMini = false;
-    let usingFullscreenAPI = false;
     let overlayFallback = false;
 
+    function resizeOverlay() {
+      // Determine displayed video size
+      const rect = img.getBoundingClientRect();
+      canvas.style.left = img.offsetLeft + 'px';
+      canvas.style.top = img.offsetTop + 'px';
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+    }
+
+    // Map centroid from FRAME_WxFRAME_H -> canvas size
+    function mapPoint(cx, cy) {
+      const cw = canvas.width;
+      const ch = canvas.height;
+      const sx = cw / FRAME_W;
+      const sy = ch / FRAME_H;
+      return [Math.round(cx * sx), Math.round(cy * sy)];
+    }
+
+    // draw overlays from people list
+    function drawOverlays(people) {
+      // clear
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      people.forEach(p => {
+        if (!p || !p.centroid) return;
+        const [cx, cy] = p.centroid;
+        const [mx, my] = mapPoint(cx, cy);
+
+        // circle
+        ctx.beginPath();
+        ctx.fillStyle = 'rgba(0,255,0,0.9)';
+        ctx.arc(mx, my, Math.max(6, Math.round(6 * (canvas.width / 640))), 0, Math.PI*2);
+        ctx.fill();
+
+        // arrow for direction using small vector from direction text
+        let dx = 0, dy = 0;
+        const dir = (p.direction || '').toUpperCase();
+        const arrowLen = Math.max(18, Math.round(18 * (canvas.width / 640)));
+        if (dir === 'LEFT') { dx = -arrowLen; dy = 0; }
+        else if (dir === 'RIGHT') { dx = arrowLen; dy = 0; }
+        else if (dir === 'UP') { dx = 0; dy = -arrowLen; }
+        else if (dir === 'DOWN') { dx = 0; dy = arrowLen; }
+        else { dx = arrowLen/2; dy = 0; } // STILL fallback
+
+        // arrow line
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(0,255,0,0.95)';
+        ctx.lineWidth = 2;
+        ctx.moveTo(mx, my);
+        ctx.lineTo(mx + dx, my + dy);
+        ctx.stroke();
+
+        // small arrow head
+        // compute simple perpendicular
+        ctx.beginPath();
+        ctx.fillStyle = 'rgba(0,255,0,0.95)';
+        // draw label box
+        const label = `ID:${p.id ?? '—'} ${p.speed_px_s ?? 0}px/s ${p.direction ?? ''}`;
+        ctx.font = `${12 * (canvas.width / 640)}px Arial`;
+        const textW = ctx.measureText(label).width;
+        const pad = 6;
+        const lx = Math.max(6, mx - (textW/2));
+        const ly = Math.max(14, my - (arrowLen + 14));
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(lx - pad/2, ly - 12, textW + pad, 18);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(label, lx, ly);
+      });
+    }
+
+    // Poll backend and update overlays
+    async function pollAndUpdate() {
+      try {
+        const res = await fetch('/count', {cache: 'no-store'});
+        if (!res.ok) throw new Error('Network');
+        const data = await res.json();
+        countEl.innerText = data.persons ?? 0;
+
+        // alert logic (modal + sound)
+        if (data.alert) {
+          const now = Date.now();
+          if (!window._alertShownAt || (now - window._alertShownAt) > 20000) {
+            window._alertShownAt = now;
+            document.getElementById('alertModal').classList.add('show');
+            const s = document.getElementById('alertSound');
+            if (s) {
+              s.currentTime = 0;
+              s.play().catch(()=>{});
+            }
+          }
+        }
+
+        // show/hide people table
+        if (Array.isArray(data.people) && data.people.length > 0) {
+          peopleTable.style.display = 'block';
+          // draw overlays
+          drawOverlays(data.people);
+          // fill table
+          peopleBody.innerHTML = '';
+          data.people.forEach(p => {
+            const tr = document.createElement('tr');
+            const idTd = document.createElement('td');
+            idTd.innerText = p.id ?? '—';
+            const spTd = document.createElement('td');
+            spTd.innerText = (p.speed_px_s ?? 0).toFixed(2);
+            const dTd = document.createElement('td');
+            dTd.innerText = p.direction ?? '—';
+            const cTd = document.createElement('td');
+            cTd.innerText = (p.centroid ? `${p.centroid[0]}, ${p.centroid[1]}` : '—');
+            tr.appendChild(idTd); tr.appendChild(spTd); tr.appendChild(dTd); tr.appendChild(cTd);
+            peopleBody.appendChild(tr);
+          });
+        } else {
+          peopleTable.style.display = 'none';
+          // still clear overlay
+          ctx.clearRect(0,0,canvas.width,canvas.height);
+        }
+      } catch (e) {
+        // network fail — silently ignore; overlays remain
+      }
+    }
+
+    // resize overlay when image loads and on window resize
+    function setupOverlay() {
+      // Wait until image has intrinsic dimensions (naturalWidth) or use fallback FRAME_W/FRAME_H
+      function trySize() {
+        // get bounding rect (display size)
+        const rect = img.getBoundingClientRect();
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+        // position overlay relative to parent
+        canvas.style.left = img.offsetLeft + 'px';
+        canvas.style.top = img.offsetTop + 'px';
+      }
+      // run now
+      trySize();
+      // also when window resizes
+      window.addEventListener('resize', trySize);
+      // when the image element updates (stream reload), periodically ensure overlay size matches
+      setInterval(trySize, 1000);
+    }
+
+    img.addEventListener('load', () => {
+      setupOverlay();
+    });
+
+    // initial call in case already loaded
+    setupOverlay();
+
+    // start polling
+    setInterval(pollAndUpdate, POLL_MS);
+    pollAndUpdate();
+
+    // dismiss modal
+    document.getElementById('dismissBtn').addEventListener('click', () => {
+      document.getElementById('alertModal').classList.remove('show');
+      // throttle re-alerts via timestamp in pollAndUpdate
+      window._alertShownAt = Date.now();
+    });
+
+    // ---------------- Full / Mini screen logic (unchanged behavior) ----------------
     function enterMini() {
-      // if already fullscreen via API, exit it first
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(()=>{});
       }
@@ -169,7 +324,6 @@
     }
 
     function enterFullFallback() {
-      // fallback overlay full (if Fullscreen API not available or failed)
       videoWrap.classList.add('overlay-full');
       overlayFallback = true;
     }
@@ -179,84 +333,42 @@
       overlayFallback = false;
     }
 
-    // Full button handler — prefers Fullscreen API
     fullBtn.addEventListener('click', async () => {
       try {
-        // If currently mini, revert first
         if (isMini) exitMini();
-
         if (document.fullscreenEnabled) {
-          // toggle fullscreen
           if (!document.fullscreenElement) {
             await videoWrap.requestFullscreen();
-            usingFullscreenAPI = true;
           } else {
             await document.exitFullscreen();
-            usingFullscreenAPI = false;
           }
         } else {
-          // fallback overlay
-          if (!overlayFallback) enterFullFallback();
-          else exitFullFallback();
+          if (!overlayFallback) enterFullFallback(); else exitFullFallback();
         }
       } catch (e) {
-        // fallback overlay if fullscreen fails
-        if (!overlayFallback) enterFullFallback();
-        else exitFullFallback();
+        if (!overlayFallback) enterFullFallback(); else exitFullFallback();
       }
     });
 
-    // Min button toggles mini mode
     minBtn.addEventListener('click', () => {
-      if (isMini) {
-        exitMini();
-      } else {
-        // if in fullscreen API, exit it
-        if (document.fullscreenElement) {
-          document.exitFullscreen().catch(()=>{});
-          usingFullscreenAPI = false;
-        }
-        // also remove overlay fallback if active
+      if (isMini) exitMini();
+      else {
+        if (document.fullscreenElement) document.exitFullscreen().catch(()=>{});
         if (overlayFallback) exitFullFallback();
         enterMini();
       }
     });
 
-    // Clean up on Esc when fullscreen or overlay
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        if (document.fullscreenElement) {
-          document.exitFullscreen().catch(()=>{});
-        }
+        if (document.fullscreenElement) document.exitFullscreen().catch(()=>{});
         if (overlayFallback) exitFullFallback();
         if (isMini) exitMini();
       }
     });
 
-    // If user exits fullscreen via browser controls, make sure state updated
     document.addEventListener('fullscreenchange', () => {
-      if (!document.fullscreenElement) {
-        usingFullscreenAPI = false;
-      } else {
-        usingFullscreenAPI = true;
-      }
-    });
-
-    // If the user drags/resizes or orientation changes, ensure mini fits viewport
-    window.addEventListener('resize', () => {
-      if (isMini) {
-        // adjust small-screen mini size
-        if (window.innerWidth < 400) {
-          videoWrap.style.width = '220px';
-          videoWrap.style.height = '140px';
-        } else {
-          videoWrap.style.width = '';
-          videoWrap.style.height = '';
-        }
-      } else {
-        videoWrap.style.width = '';
-        videoWrap.style.height = '';
-      }
+      // nothing special — overlay sizing handles it
     });
   </script>
 </body>
