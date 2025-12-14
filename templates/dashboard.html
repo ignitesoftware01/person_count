@@ -12,71 +12,36 @@
     .header-right{display:flex;align-items:center;gap:10px}
     #videoWrap{background:#000;border-radius:8px;overflow:hidden;height:540px;display:flex;justify-content:center;align-items:center;position:relative;transition:all .25s ease}
     #stream{width:100%;height:100%;object-fit:cover;display:block}
-    /* canvas sits on top of image */
-    #overlay {
-      position: absolute;
-      left: 0;
-      top: 0;
-      pointer-events: none; /* clicks pass through */
-    }
+    #overlay{position:absolute;left:0;top:0;pointer-events:none}
     .controls{display:flex;gap:12px;align-items:center;margin-top:10px}
     .countBox{background:#fff;padding:12px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.08)}
     .btn{padding:8px 12px;border-radius:8px;border:none;cursor:pointer;background:#1f6feb;color:#fff}
     .btn.logout{background:#e53e3e}
     .btn.alt{background:#6b7280}
-    /* modal */
     .modal{position:fixed;left:0;top:0;width:100%;height:100%;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);z-index:9999}
     .modal.show{display:flex}
     .modal-card{background:#fff;padding:20px;border-radius:8px;max-width:420px;text-align:center}
     .modal-card h2{margin:0 0 8px}
-    /* Mini mode */
-    .mini {
-      position: fixed !important;
-      width: 320px !important;
-      height: 180px !important;
-      bottom: 18px;
-      right: 18px;
-      z-index: 9998;
-      border-radius: 8px;
-      box-shadow: 0 12px 40px rgba(2,6,23,0.35);
-      transform: translateZ(0);
-    }
-    .overlay-full {
-      position: fixed !important;
-      left: 0 !important;
-      top: 0 !important;
-      width: 100vw !important;
-      height: 100vh !important;
-      z-index: 9997;
-      border-radius: 0 !important;
-    }
-    @media (max-width:980px){
-      #videoWrap{height:360px}
-      .mini{width:220px;height:140px}
-    }
-
-    /* little badge/table for people (optional) */
-    .people-table {
-      margin-top:10px;
-      background:#fff;padding:10px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.06);
-      font-size:13px;
-    }
-    .people-table table { width:100%; border-collapse:collapse; }
-    .people-table th, .people-table td { text-align:left; padding:6px 8px; border-bottom:1px solid #f0f0f0; }
+    .mini{position:fixed !important;width:320px !important;height:180px !important;bottom:18px;right:18px;z-index:9998;border-radius:8px;box-shadow:0 12px 40px rgba(2,6,23,0.35);transform:translateZ(0)}
+    .overlay-full{position:fixed !important;left:0 !important;top:0 !important;width:100vw !important;height:100vh !important;z-index:9997;border-radius:0 !important}
+    
+    /* FIX APPLIED BELOW: Added space after the opening bracket to prevent Jinja syntax error */
+    @media (max-width:980px){ #videoWrap{height:360px}.mini{width:220px;height:140px}}
+    
+    .people-table{margin-top:10px;background:#fff;padding:10px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.06);font-size:13px}
+    .people-table table{width:100%;border-collapse:collapse}
+    .people-table th,.people-table td{text-align:left;padding:6px 8px;border-bottom:1px solid #f0f0f0}
+    .anomaly-flag{color:#e53e3e;font-weight:bold}
   </style>
 </head>
 <body>
   <div class="container">
     <header>
       <h1>Person Detection Dashboard</h1>
-
       <div class="header-right">
         <div style="font-size:13px;color:#333">Signed in as: <strong>{{ session.get('user_email') }}</strong></div>
-
-        <!-- Full / Min controls -->
         <button id="minBtn" class="btn alt" title="Mini screen">Min</button>
         <button id="fullBtn" class="btn" title="Full screen">Full</button>
-
         <a href="{{ url_for('snapshot') }}" target="_blank"><button class="btn alt" title="Snapshot">Snapshot</button></a>
         <a href="{{ url_for('logout') }}"><button class="btn logout" title="Logout">Logout</button></a>
       </div>
@@ -84,292 +49,150 @@
 
     <section id="main">
       <div id="videoWrap" aria-live="polite">
-        <!-- live mjpeg stream -->
         <img id="stream" src="{{ url_for('video_feed') }}" alt="Live stream">
-        <!-- overlay canvas - will be resized to match stream -->
         <canvas id="overlay"></canvas>
       </div>
-
       <div class="controls">
         <div class="countBox">Persons detected: <strong id="count">0</strong></div>
+        <div class="countBox" id="conflictBox" style="background:#ffdddd; color:#e53e3e; display:none;">
+            <strong>⚠️ Crowd Conflict Detected!</strong>
+        </div>
       </div>
-
-      <!-- Optional: small table to show per-person stats -->
       <div class="people-table" id="peopleTable" style="display:none">
-        <strong>Live people</strong>
+        <strong>Live people & Tracking Status</strong>
         <table>
-          <thead><tr><th>ID</th><th>Speed (px/s)</th><th>Direction</th><th>Centroid</th></tr></thead>
+          <thead><tr><th>ID</th><th>Speed (px/s)</th><th>Direction</th><th>Centroid</th><th>Anomaly</th></tr></thead>
           <tbody id="peopleBody"></tbody>
         </table>
       </div>
     </section>
   </div>
 
-  <!-- Modal alert -->
   <div id="alertModal" class="modal" role="dialog" aria-hidden="true">
     <div class="modal-card">
       <h2>⚠️ Alert</h2>
-      <p>More than 5 persons detected!</p>
+      <p id="alertMessage">Alert</p>
       <div style="margin-top:12px">
         <button id="dismissBtn" class="btn">Dismiss</button>
       </div>
     </div>
   </div>
 
-  <!-- Optional sound (place a small beep file at static/snd/alert.mp3) -->
   <audio id="alertSound" preload="auto">
     <source src="{{ url_for('static', filename='snd/alert.mp3') }}" type="audio/mpeg">
   </audio>
 
   <script>
-    // === CONFIG ===
-    // IMPORTANT: these should match your camera capture resolution in app.py
-    // If you change cap.set(...) in app.py, update these values accordingly.
-    const FRAME_W = 1280;
-    const FRAME_H = 720;
-
-    // Polling interval (ms)
-    const POLL_MS = 500;
-
-    // overlay & stream elements
+    const FRAME_W = 1280, FRAME_H = 720, POLL_MS = 500;
     const img = document.getElementById('stream');
     const canvas = document.getElementById('overlay');
     const ctx = canvas.getContext('2d');
-
-    // UI elements
     const countEl = document.getElementById('count');
     const peopleTable = document.getElementById('peopleTable');
     const peopleBody = document.getElementById('peopleBody');
-
-    // Full/Mini controls (keeps existing behavior)
+    const conflictBox = document.getElementById('conflictBox');
+    const alertModal = document.getElementById('alertModal');
+    const alertMessage = document.getElementById('alertMessage');
     const videoWrap = document.getElementById('videoWrap');
     const fullBtn = document.getElementById('fullBtn');
     const minBtn = document.getElementById('minBtn');
-    let isMini = false;
-    let overlayFallback = false;
+    let isMini = false, overlayFallback = false;
 
-    function resizeOverlay() {
-      // Determine displayed video size
-      const rect = img.getBoundingClientRect();
-      canvas.style.left = img.offsetLeft + 'px';
-      canvas.style.top = img.offsetTop + 'px';
-      canvas.width = rect.width;
-      canvas.height = rect.height;
-    }
-
-    // Map centroid from FRAME_WxFRAME_H -> canvas size
     function mapPoint(cx, cy) {
-      const cw = canvas.width;
-      const ch = canvas.height;
-      const sx = cw / FRAME_W;
-      const sy = ch / FRAME_H;
+      const sx = canvas.width / FRAME_W, sy = canvas.height / FRAME_H;
       return [Math.round(cx * sx), Math.round(cy * sy)];
     }
 
-    // draw overlays from people list
     function drawOverlays(people) {
-      // clear
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
       people.forEach(p => {
         if (!p || !p.centroid) return;
         const [cx, cy] = p.centroid;
         const [mx, my] = mapPoint(cx, cy);
-
-        // circle
-        ctx.beginPath();
-        ctx.fillStyle = 'rgba(0,255,0,0.9)';
-        ctx.arc(mx, my, Math.max(6, Math.round(6 * (canvas.width / 640))), 0, Math.PI*2);
-        ctx.fill();
-
-        // arrow for direction using small vector from direction text
-        let dx = 0, dy = 0;
-        const dir = (p.direction || '').toUpperCase();
-        const arrowLen = Math.max(18, Math.round(18 * (canvas.width / 640)));
-        if (dir === 'LEFT') { dx = -arrowLen; dy = 0; }
-        else if (dir === 'RIGHT') { dx = arrowLen; dy = 0; }
-        else if (dir === 'UP') { dx = 0; dy = -arrowLen; }
-        else if (dir === 'DOWN') { dx = 0; dy = arrowLen; }
-        else { dx = arrowLen/2; dy = 0; } // STILL fallback
-
-        // arrow line
-        ctx.beginPath();
-        ctx.strokeStyle = 'rgba(0,255,0,0.95)';
-        ctx.lineWidth = 2;
-        ctx.moveTo(mx, my);
-        ctx.lineTo(mx + dx, my + dy);
-        ctx.stroke();
-
-        // small arrow head
-        // compute simple perpendicular
-        ctx.beginPath();
-        ctx.fillStyle = 'rgba(0,255,0,0.95)';
-        // draw label box
-        const label = `ID:${p.id ?? '—'} ${p.speed_px_s ?? 0}px/s ${p.direction ?? ''}`;
-        ctx.font = `${12 * (canvas.width / 640)}px Arial`;
-        const textW = ctx.measureText(label).width;
-        const pad = 6;
-        const lx = Math.max(6, mx - (textW/2));
-        const ly = Math.max(14, my - (arrowLen + 14));
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillRect(lx - pad/2, ly - 12, textW + pad, 18);
-        ctx.fillStyle = '#fff';
-        ctx.fillText(label, lx, ly);
+        const isAnomaly = p.anomaly;
+        const color = isAnomaly ? 'rgba(255,0,0,0.9)' : 'rgba(0,255,0,0.9)';
+        const strokeColor = isAnomaly ? 'rgba(255,0,0,0.95)' : 'rgba(0,255,0,0.95)';
+        
+        ctx.beginPath(); ctx.fillStyle=color; ctx.arc(mx,my,Math.max(6,Math.round(6*(canvas.width/640))),0,Math.PI*2); ctx.fill();
+        
+        let dx=0, dy=0; const dir = (p.direction||'').toUpperCase(); const arrowLen=Math.max(18,Math.round(18*(canvas.width/640)));
+        if(dir==='LEFT'){dx=-arrowLen;} else if(dir==='RIGHT'){dx=arrowLen;} else if(dir==='UP'){dy=-arrowLen;} else if(dir==='DOWN'){dy=arrowLen;} else{dx=arrowLen/2;}
+        ctx.beginPath(); ctx.strokeStyle=strokeColor; ctx.lineWidth=2; ctx.moveTo(mx,my); ctx.lineTo(mx+dx,my+dy); ctx.stroke();
+        
+        let label = `ID:${p.id??'—'} ${p.speed_px_s??0}px/s ${p.direction??''}`;
+        if(isAnomaly){label+=` (${p.anomaly_reason||'Anomaly'})`;}
+        ctx.font=`${12*(canvas.width/640)}px Arial`;
+        const textW=ctx.measureText(label).width, pad=6;
+        let lx=mx-(textW/2);
+        if (lx < 6) lx = 6;
+        if (lx + textW + pad > canvas.width) lx = canvas.width - textW - pad;
+        const ly=Math.max(14,my-(arrowLen+14));
+        ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(lx - (pad/2), ly - 12, textW + pad, 18);
+        ctx.fillStyle='#fff'; ctx.fillText(label, lx, ly);
       });
     }
 
-    // Poll backend and update overlays
     async function pollAndUpdate() {
-      try {
-        const res = await fetch('/count', {cache: 'no-store'});
-        if (!res.ok) throw new Error('Network');
+      try{
+        const res = await fetch('/count',{cache:'no-store'});
         const data = await res.json();
-        countEl.innerText = data.persons ?? 0;
-
-        // alert logic (modal + sound)
-        if (data.alert) {
+        countEl.innerText = data.persons??0;
+        conflictBox.style.display = data.crowd_conflict ? 'block' : 'none';
+        const individualAnomaly = Array.isArray(data.people) && data.people.some(p=>p.anomaly);
+        
+        if(data.alert || individualAnomaly || data.crowd_conflict){
+          let reason='High crowd detected';
+          if(data.crowd_conflict) reason='Crowd Conflict/Backflow detected!';
+          else if(individualAnomaly){
+            const anomalyReasons = data.people.filter(p=>p.anomaly).map(p=>`ID ${p.id}: ${p.anomaly_reason||'Anomaly'}`).join('; ');
+            reason = `Individual Anomaly: ${anomalyReasons}`;
+          }
+          alertMessage.innerText = reason;
           const now = Date.now();
-          if (!window._alertShownAt || (now - window._alertShownAt) > 20000) {
+          if(!window._alertShownAt || (now - window._alertShownAt) > 20000){
             window._alertShownAt = now;
-            document.getElementById('alertModal').classList.add('show');
-            const s = document.getElementById('alertSound');
-            if (s) {
-              s.currentTime = 0;
-              s.play().catch(()=>{});
-            }
+            const s = document.getElementById('alertSound'); if(s){ s.play().catch(()=>{}); }
+            alertModal.classList.add('show');
           }
         }
-
-        // show/hide people table
-        if (Array.isArray(data.people) && data.people.length > 0) {
-          peopleTable.style.display = 'block';
-          // draw overlays
+        if(Array.isArray(data.people) && data.people.length > 0){
+          peopleTable.style.display='block';
           drawOverlays(data.people);
-          // fill table
-          peopleBody.innerHTML = '';
-          data.people.forEach(p => {
-            const tr = document.createElement('tr');
-            const idTd = document.createElement('td');
-            idTd.innerText = p.id ?? '—';
-            const spTd = document.createElement('td');
-            spTd.innerText = (p.speed_px_s ?? 0).toFixed(2);
-            const dTd = document.createElement('td');
-            dTd.innerText = p.direction ?? '—';
-            const cTd = document.createElement('td');
-            cTd.innerText = (p.centroid ? `${p.centroid[0]}, ${p.centroid[1]}` : '—');
-            tr.appendChild(idTd); tr.appendChild(spTd); tr.appendChild(dTd); tr.appendChild(cTd);
+          peopleBody.innerHTML='';
+          data.people.forEach(p=>{
+            const tr=document.createElement('tr');
+            ['id','speed_px_s','direction','centroid'].forEach(k=>{
+              const td=document.createElement('td');
+              td.innerText = (k==='centroid') ? (p.centroid ? `${p.centroid[0]}, ${p.centroid[1]}` : '—') : (p[k] ?? '—');
+              tr.appendChild(td);
+            });
+            const anomTd=document.createElement('td');
+            anomTd.innerHTML = p.anomaly ? `<span class="anomaly-flag">${p.anomaly_reason||'YES'}</span>` : 'No';
+            tr.appendChild(anomTd);
             peopleBody.appendChild(tr);
           });
         } else {
-          peopleTable.style.display = 'none';
-          // still clear overlay
+          peopleTable.style.display='none';
           ctx.clearRect(0,0,canvas.width,canvas.height);
         }
-      } catch (e) {
-        // network fail — silently ignore; overlays remain
-      }
+      }catch(e){console.error(e);}
     }
 
-    // resize overlay when image loads and on window resize
-    function setupOverlay() {
-      // Wait until image has intrinsic dimensions (naturalWidth) or use fallback FRAME_W/FRAME_H
-      function trySize() {
-        // get bounding rect (display size)
-        const rect = img.getBoundingClientRect();
-        canvas.width = rect.width;
-        canvas.height = rect.height;
-        // position overlay relative to parent
-        canvas.style.left = img.offsetLeft + 'px';
-        canvas.style.top = img.offsetTop + 'px';
-      }
-      // run now
-      trySize();
-      // also when window resizes
-      window.addEventListener('resize', trySize);
-      // when the image element updates (stream reload), periodically ensure overlay size matches
-      setInterval(trySize, 1000);
+    function setupOverlay(){
+      const rect = img.getBoundingClientRect();
+      canvas.width = rect.width; canvas.height = rect.height;
+      canvas.style.left = img.offsetLeft + 'px'; canvas.style.top = img.offsetTop + 'px';
     }
-
-    img.addEventListener('load', () => {
-      setupOverlay();
-    });
-
-    // initial call in case already loaded
-    setupOverlay();
-
-    // start polling
+    img.addEventListener('load', setupOverlay);
+    window.addEventListener('resize', setupOverlay);
     setInterval(pollAndUpdate, POLL_MS);
-    pollAndUpdate();
-
-    // dismiss modal
-    document.getElementById('dismissBtn').addEventListener('click', () => {
-      document.getElementById('alertModal').classList.remove('show');
-      // throttle re-alerts via timestamp in pollAndUpdate
-      window._alertShownAt = Date.now();
+    document.getElementById('dismissBtn').addEventListener('click', ()=>{ alertModal.classList.remove('show'); });
+    
+    fullBtn.addEventListener('click', ()=>{
+        if(!document.fullscreenElement) videoWrap.requestFullscreen().catch(()=>{videoWrap.classList.add('overlay-full');});
+        else document.exitFullscreen();
     });
-
-    // ---------------- Full / Mini screen logic (unchanged behavior) ----------------
-    function enterMini() {
-      if (document.fullscreenElement) {
-        document.exitFullscreen().catch(()=>{});
-      }
-      videoWrap.classList.remove('overlay-full');
-      videoWrap.classList.add('mini');
-      isMini = true;
-    }
-
-    function exitMini() {
-      videoWrap.classList.remove('mini');
-      isMini = false;
-    }
-
-    function enterFullFallback() {
-      videoWrap.classList.add('overlay-full');
-      overlayFallback = true;
-    }
-
-    function exitFullFallback() {
-      videoWrap.classList.remove('overlay-full');
-      overlayFallback = false;
-    }
-
-    fullBtn.addEventListener('click', async () => {
-      try {
-        if (isMini) exitMini();
-        if (document.fullscreenEnabled) {
-          if (!document.fullscreenElement) {
-            await videoWrap.requestFullscreen();
-          } else {
-            await document.exitFullscreen();
-          }
-        } else {
-          if (!overlayFallback) enterFullFallback(); else exitFullFallback();
-        }
-      } catch (e) {
-        if (!overlayFallback) enterFullFallback(); else exitFullFallback();
-      }
-    });
-
-    minBtn.addEventListener('click', () => {
-      if (isMini) exitMini();
-      else {
-        if (document.fullscreenElement) document.exitFullscreen().catch(()=>{});
-        if (overlayFallback) exitFullFallback();
-        enterMini();
-      }
-    });
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        if (document.fullscreenElement) document.exitFullscreen().catch(()=>{});
-        if (overlayFallback) exitFullFallback();
-        if (isMini) exitMini();
-      }
-    });
-
-    document.addEventListener('fullscreenchange', () => {
-      // nothing special — overlay sizing handles it
-    });
+    minBtn.addEventListener('click', ()=>{ videoWrap.classList.toggle('mini'); });
   </script>
 </body>
 </html>

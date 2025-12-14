@@ -1,3 +1,4 @@
+# app.py
 import os
 import time
 import sqlite3
@@ -13,31 +14,36 @@ APP_SECRET = os.environ.get("FLASK_SECRET", "change_this_secret")
 DB_PATH = "users.db"
 MODEL_PATH = os.environ.get("YOLO_MODEL", "yolov8n.pt")
 IMG_SIZE = int(os.environ.get("IMG_SIZE", "640"))
-HOST = "0.0.0.0"
+HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", 5000))
 
-# Tracking config
-TRACKER_MAX_AGE = float(os.environ.get("TRACKER_MAX_AGE", 5.0))   # seconds before deleting track
-ARROW_SCALE = float(os.environ.get("ARROW_SCALE", 0.08))         # visual scale for arrows
+TRACKER_MAX_AGE = float(os.environ.get("TRACKER_MAX_AGE", 5.0))
+ARROW_SCALE = float(os.environ.get("ARROW_SCALE", 0.08))
+HISTORY_PRUNE_TIME = float(os.environ.get("HISTORY_PRUNE_TIME", 5.0))
 
-# ----------------------------------------
+ANOMALY_LOITERING_SPEED = float(os.environ.get("ANOMALY_LOITERING_SPEED", 5.0))
+ANOMALY_LOITERING_DURATION = float(os.environ.get("ANOMALY_LOITERING_DURATION", 3.0))
+ANOMALY_STAMPEDE_SPEED = float(os.environ.get("ANOMALY_STAMPEDE_SPEED", 150.0))
+ANOMALY_CROWD_COUNT = int(os.environ.get("ANOMALY_CROWD_COUNT", 6))
+ANOMALY_CONFLICT_RATIO = float(os.environ.get("ANOMALY_CONFLICT_RATIO", 0.25))  # More sensitive
+ANOMALY_DENSITY_THRESHOLD = int(os.environ.get("ANOMALY_DENSITY_THRESHOLD", 10))  # New: for very dense crowd
 
+# ---------------- App & shared state ----------------
 app = Flask(__name__)
 app.secret_key = APP_SECRET
 
-# Shared state
 latest_frame_jpg = None
 latest_person_count = 0
 latest_people_report = []
+latest_crowd_conflict = False
 frame_lock = threading.Lock()
 running = True
 
-# Tracking state: track_id -> {"pos":(x,y), "last_seen":ts, "history":[(t,(x,y)), ...]}
 _tracks = {}
 _next_track_id = 1
 _tracks_lock = threading.Lock()
 
-# ---------------- Database helpers & migration ----------------
+# ---------------- Database ----------------
 def init_db_and_migrate():
     need_create = False
     conn = sqlite3.connect(DB_PATH)
@@ -61,7 +67,6 @@ def init_db_and_migrate():
                     """)
                     conn.execute("INSERT OR IGNORE INTO users (email, password) SELECT username, password FROM old_users")
                     conn.commit()
-                    print("Migrated old users.username -> users.email")
                 except Exception as e:
                     print("Migration failed:", e)
                     conn.execute("DROP TABLE IF EXISTS old_users")
@@ -78,17 +83,15 @@ def init_db_and_migrate():
             )
         """)
         conn.commit()
-
     conn.close()
 
-# Initialize DB
 init_db_and_migrate()
 
 # ---------------- Load YOLO ----------------
 print("Loading YOLO model:", MODEL_PATH)
 model = YOLO(MODEL_PATH)
 
-# ---------------- Camera auto-detect ----------------
+# ---------------- Camera ----------------
 def find_working_camera_index(max_index=5):
     backends = []
     if hasattr(cv2, "CAP_DSHOW"):
@@ -124,19 +127,19 @@ def _next_id():
 
 def _add_track(track_id, pos, ts):
     with _tracks_lock:
-        _tracks[track_id] = {"pos": pos, "last_seen": ts, "history": [(ts, pos)]}
+        _tracks[track_id] = {"pos": pos, "last_seen": ts, "history": [(ts, pos)], "anomaly_reason": None}
 
 def _update_track(track_id, pos, ts):
+    global HISTORY_PRUNE_TIME
     with _tracks_lock:
         tr = _tracks.get(track_id)
         if tr is None:
-            _tracks[track_id] = {"pos": pos, "last_seen": ts, "history": [(ts, pos)]}
+            _tracks[track_id] = {"pos": pos, "last_seen": ts, "history": [(ts, pos)], "anomaly_reason": None}
             return
         tr["pos"] = pos
         tr["last_seen"] = ts
         tr["history"].append((ts, pos))
-        # prune history to recent 1 second for stable speed
-        cutoff = ts - 1.0
+        cutoff = ts - HISTORY_PRUNE_TIME
         tr["history"] = [(t,p) for (t,p) in tr["history"] if t >= cutoff]
 
 def _age_and_cleanup(max_age=TRACKER_MAX_AGE):
@@ -150,11 +153,6 @@ def _age_and_cleanup(max_age=TRACKER_MAX_AGE):
             del _tracks[tid]
 
 def _match_and_assign_ids(detected_centroids):
-    """
-    Simple greedy matching: match detected centroids to existing tracks by nearest neighbor.
-    Returns list of (track_id, centroid) matched, and list of unmatched centroids.
-    If a detection doesn't match any track within threshold, assign a new ID.
-    """
     matches = []
     unmatched = []
     used_tids = set()
@@ -162,9 +160,7 @@ def _match_and_assign_ids(detected_centroids):
         return matches, []
 
     with _tracks_lock:
-        # build list of (tid, pos)
         track_items = [(tid, tr["pos"]) for tid, tr in _tracks.items()]
-    # compute all distances
     pairs = []
     for tid, tpos in track_items:
         for dpos in detected_centroids:
@@ -173,7 +169,6 @@ def _match_and_assign_ids(detected_centroids):
     pairs.sort(key=lambda x: x[0])
     used_d = set()
     for dist, tid, dpos in pairs:
-        # threshold = half diagonal? set 150 px typical
         if dist > 150:
             continue
         if tid in used_tids:
@@ -184,7 +179,6 @@ def _match_and_assign_ids(detected_centroids):
         used_tids.add(tid)
         used_d.add(dpos)
     unmatched = [d for d in detected_centroids if d not in used_d]
-    # create new ids for unmatched
     new_assigned = []
     for d in unmatched:
         nid = _next_id()
@@ -193,21 +187,17 @@ def _match_and_assign_ids(detected_centroids):
     return matches + new_assigned, []
 
 def _compute_speed_and_direction(history):
-    """
-    history: list of (t,(x,y)) with recent entries (we prune to ~1s)
-    returns vx, vy (px/s), speed (px/s), direction string
-    """
     if len(history) < 2:
-        return 0.0, 0.0, 0.0, "STILL"
+        return 0.0, 0.0, 0.0, "STILL", []
     t0, p0 = history[0]
     t1, p1 = history[-1]
     dt = t1 - t0
     if dt <= 0.0001:
-        return 0.0, 0.0, 0.0, "STILL"
+        return 0.0, 0.0, 0.0, "STILL", []
+
     vx = (p1[0] - p0[0]) / dt
     vy = (p1[1] - p0[1]) / dt
     speed = (vx**2 + vy**2)**0.5
-    # direction by dominant axis
     if abs(vx) < 2 and abs(vy) < 2:
         d = "STILL"
     else:
@@ -215,58 +205,81 @@ def _compute_speed_and_direction(history):
             d = "RIGHT" if vx > 0 else "LEFT"
         else:
             d = "DOWN" if vy > 0 else "UP"
-    return vx, vy, speed, d
 
-# ---------------- Model inference + annotate (person-only) ----------------
+    recent_speeds = []
+    for i in range(1, len(history)):
+        t_prev, p_prev = history[i-1]
+        t_curr, p_curr = history[i]
+        dt_segment = t_curr - t_prev
+        if dt_segment > 0.0001:
+            dx = p_curr[0] - p_prev[0]
+            dy = p_curr[1] - p_prev[1]
+            recent_speeds.append((dx**2+dy**2)**0.5 / dt_segment)
+
+    return vx, vy, speed, d, recent_speeds
+
+# ---------------- Anomaly detection improvements ----------------
+def _check_for_anomalies(track_id, speed, direction, history, people_report_count):
+    anomaly_reason = None
+    now = time.time()
+    # Loitering detection
+    if speed < ANOMALY_LOITERING_SPEED and len(history) > 1:
+        start_time = history[0][0]
+        if (now - start_time) >= ANOMALY_LOITERING_DURATION:
+            anomaly_reason = "LOITERING"
+
+    # Extreme movement in high-density crowd
+    if people_report_count >= ANOMALY_CROWD_COUNT and speed > ANOMALY_STAMPEDE_SPEED:
+        if anomaly_reason:
+            anomaly_reason += "/EXTREME_SPEED"
+        else:
+            anomaly_reason = "EXTREME_SPEED"
+
+    # Very high crowd density anomaly
+    if people_report_count >= ANOMALY_DENSITY_THRESHOLD:
+        if anomaly_reason:
+            anomaly_reason += "/HIGH_DENSITY"
+        else:
+            anomaly_reason = "HIGH_DENSITY"
+
+    return anomaly_reason is not None, anomaly_reason
+
+# ---------------- Inference & annotate ----------------
 def safe_infer_and_annotate(frame):
-    """
-    Runs YOLO tracker, obtains bboxes and (if available) track ids, computes speed/direction
-    Draws bbox, centroid circle, arrow for heading, and label with ID+speed+direction.
-    Returns annotated_bgr (BGR uint8), person_count (int), people_report (list of dicts).
-    """
-    global _tracks
+    global _tracks, latest_people_report, latest_crowd_conflict
     try:
-        # Use tracker. This uses ultralytics' track API; some versions accept model.track()
-        # If your ultralytics doesn't support .track, this may raise — fallback detection-only below.
         results = model.track(frame, imgsz=IMG_SIZE, classes=[0], tracker="bytetrack.yaml")
         r = results[0]
     except Exception:
         try:
-            # fallback: detection-only (no persistent IDs)
             results = model(frame, imgsz=IMG_SIZE, classes=[0])
             r = results[0]
         except Exception:
-            return None, 0, []
+            with frame_lock:
+                latest_crowd_conflict = False
+            return frame, 0, [], False
 
     boxes = getattr(r, "boxes", None)
     if boxes is None:
-        return frame, 0, []
+        with frame_lock:
+            latest_crowd_conflict = False
+        return frame, 0, [], False
 
-    # get xyxy
     try:
         xyxy = boxes.xyxy.cpu().numpy()
     except Exception:
-        try:
-            xyxy = np.array(boxes.xyxy)
-        except Exception:
-            xyxy = []
+        xyxy = []
 
-    # try to fetch ids (ByteTrack sets boxes.id)
     ids_arr = None
     try:
-        # prefer boxes.id if present
         ids_arr = boxes.id.cpu().numpy()
     except Exception:
-        try:
-            ids_arr = np.array(boxes.id)
-        except Exception:
-            ids_arr = None
+        ids_arr = None
 
     annotated = frame.copy()
     detected_centroids = []
-    raw_items = []  # list of tuples (centroid, tid_or_none, bbox)
+    raw_items = []
 
-    # build detection list
     for i, box in enumerate(xyxy):
         try:
             x1, y1, x2, y2 = [int(v) for v in box]
@@ -287,149 +300,145 @@ def safe_infer_and_annotate(frame):
         detected_centroids.append((cx, cy))
         raw_items.append(((cx, cy), tid, (x1, y1, x2, y2)))
 
-    # If tracker provided no ids (detection-only), we'll match to existing tracks greedily and create new IDs
     people_report = []
     now = time.time()
-
-    # First, if any detections have tid, update/create tracks for those
-    # We'll collect centroids that do not have tid and match them
     centroids_no_id = []
-    for (cx, cy), tid, bbox in raw_items:
-        if tid is not None:
-            # update or create track with this tid
-            _update_track(tid, (cx, cy), now)
+    for (cx, cy), tid_in, bbox in raw_items:
+        if tid_in is not None:
+            _update_track(tid_in, (cx, cy), now)
         else:
             centroids_no_id.append((cx, cy))
-
-    # greedy matching for centroids without id
     if centroids_no_id:
-        # match these centroids to existing tracks
         matches, _ = _match_and_assign_ids(centroids_no_id)
-        # matches is list of (tid, centroid) where new tids were also created
         for tid, centroid in matches:
             _update_track(tid, centroid, now)
 
-    # now prepare drawing & report by iterating current tracks and marking those near detections
-    # Build a quick list of tracks snapshot
     with _tracks_lock:
         tracks_snapshot = dict(_tracks)
 
-    # For each detection (raw_items), find nearest track id (within threshold) to display
+    vx_sum, vy_sum = 0.0, 0.0
+    person_count = 0
+    directions_map = {"UP":0,"DOWN":0,"LEFT":0,"RIGHT":0,"STILL":0}
+
     for (cx, cy), tid_in, bbox in raw_items:
         x1, y1, x2, y2 = bbox
-        # find nearest track
-        nearest_tid = None
-        nearest_dist = None
-        for tid, tr in tracks_snapshot.items():
-            tx, ty = tr["pos"]
-            dist = ((tx - cx)**2 + (ty - cy)**2)**0.5
-            if nearest_dist is None or dist < nearest_dist:
-                nearest_dist = dist
-                nearest_tid = tid
-        # if nearest distance is reasonably close (150 px threshold), use that id; else use provided tid_in if exists
-        chosen_tid = None
-        if tid_in is not None:
-            chosen_tid = tid_in
-            # ensure track exists; if not, add
-            with _tracks_lock:
-                if chosen_tid not in _tracks:
-                    _add_track(chosen_tid, (cx, cy), now)
-        elif nearest_tid is not None and nearest_dist is not None and nearest_dist <= 150:
-            chosen_tid = nearest_tid
-            # update that track with current detection to keep it fresh
-            _update_track(chosen_tid, (cx, cy), now)
-        else:
-            # create a new track id
-            chosen_tid = _next_id()
-            _add_track(chosen_tid, (cx, cy), now)
+        chosen_tid = tid_in
+        if chosen_tid is None:
+            nearest_tid = None
+            nearest_dist = None
+            for tid, tr in tracks_snapshot.items():
+                tx, ty = tr["pos"]
+                dist = ((tx - cx)**2 + (ty - cy)**2)**0.5
+                if nearest_dist is None or dist < nearest_dist:
+                    nearest_dist = dist
+                    nearest_tid = tid
+            if nearest_tid is not None and nearest_dist <= 150:
+                chosen_tid = nearest_tid
+                _update_track(chosen_tid, (cx, cy), now)
+            else:
+                chosen_tid = _next_id()
+                _add_track(chosen_tid, (cx, cy), now)
 
-        # compute speed & direction from track history
         with _tracks_lock:
             tr = _tracks.get(chosen_tid)
-            history = tr["history"] if tr is not None else [(now, (cx, cy))]
-        vx, vy, speed_px_s, direction = _compute_speed_and_direction(history)
+            history = tr["history"] if tr else [(now, (cx, cy))]
 
-        # draw bounding box (keep green)
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 200, 0), 2)
-        # draw a filled circle at centroid
-        cv2.circle(annotated, (cx, cy), 6, (0, 255, 0), -1)
-        # draw heading arrow
-        # arrow end is centroid + (vx, vy) scaled down for visibility
-        ax = int(cx + vx * ARROW_SCALE)
-        ay = int(cy + vy * ARROW_SCALE)
-        cv2.arrowedLine(annotated, (cx, cy), (ax, ay), (0, 255, 0), 2, tipLength=0.3)
-        # label: ID and speed and direction
+        vx, vy, speed_px_s, direction, _ = _compute_speed_and_direction(history)
+        is_anomaly, anomaly_reason = _check_for_anomalies(chosen_tid, speed_px_s, direction, history, len(raw_items))
+
+        with _tracks_lock:
+            if tr: tr["anomaly_reason"] = anomaly_reason
+
+        if direction in directions_map:
+            directions_map[direction] += 1
+        vx_sum += vx
+        vy_sum += vy
+        person_count += 1
+
+        color = (0,200,0) if not is_anomaly else (0,0,255)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+        cv2.circle(annotated, (cx, cy), 6, color, -1)
+        ax = int(cx + vx*ARROW_SCALE)
+        ay = int(cy + vy*ARROW_SCALE)
+        cv2.arrowedLine(annotated, (cx, cy), (ax, ay), color, 2, tipLength=0.3)
         label = f"ID:{chosen_tid} {speed_px_s:.1f}px/s {direction}"
-        # place text avoiding overflow
-        tx = x1
-        ty = max(10, y1 - 10)
-        cv2.putText(annotated, label, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1, cv2.LINE_AA)
+        if anomaly_reason: label += f" | ANOMALY:{anomaly_reason}"
+        cv2.putText(annotated, label, (x1, max(10, y1-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
 
-        # append to report
         people_report.append({
             "id": int(chosen_tid),
             "centroid": [int(cx), int(cy)],
-            "speed_px_s": round(float(speed_px_s), 2),
-            "direction": direction
+            "speed_px_s": round(float(speed_px_s),2),
+            "direction": direction,
+            "anomaly": is_anomaly,
+            "anomaly_reason": anomaly_reason
         })
 
-    # cleanup old tracks
+    # ---------------- Enhanced crowd conflict detection ----------------
+    crowd_conflict = False
+    if person_count >= ANOMALY_CROWD_COUNT:
+        active_directions = {k:v for k,v in directions_map.items() if k!="STILL"}
+        total_active = sum(active_directions.values())
+        if total_active > 1:
+            dominant_direction = max(active_directions, key=active_directions.get)
+            dominant_count = active_directions[dominant_direction]
+            opposite_count = 0
+            if dominant_direction=="LEFT": opposite_count=active_directions.get("RIGHT",0)
+            elif dominant_direction=="RIGHT": opposite_count=active_directions.get("LEFT",0)
+            elif dominant_direction=="UP": opposite_count=active_directions.get("DOWN",0)
+            elif dominant_direction=="DOWN": opposite_count=active_directions.get("UP",0)
+            if dominant_count>0 and (opposite_count/dominant_count)>=ANOMALY_CONFLICT_RATIO:
+                crowd_conflict=True
+        # Additional density-based alert
+        if person_count >= ANOMALY_DENSITY_THRESHOLD:
+            crowd_conflict=True
+
     _age_and_cleanup(TRACKER_MAX_AGE)
+    person_count=len(people_report)
+    count_color=(0,255,0) if not crowd_conflict else (0,0,255)
+    cv2.putText(annotated, f"Persons: {person_count}", (10,40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, count_color, 2)
+    if crowd_conflict:
+        cv2.putText(annotated, "ALERT: CROWD CONFLICT/BACKFLOW/HIGH DENSITY", (10,80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2)
 
-    # final overlay persons count
-    person_count = len(people_report)
-    cv2.putText(annotated, f"Persons: {person_count}", (10, 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-
-    # store latest report thread-safely
     with frame_lock:
-        # update global latest_people_report
-        global latest_people_report
         latest_people_report = people_report.copy()
+        latest_crowd_conflict = crowd_conflict
 
-    return annotated, person_count, people_report
+    return annotated, person_count, people_report, crowd_conflict
 
-# ---------------- Camera capture thread ----------------
+# ---------------- Camera thread ----------------
 def capture_loop():
-    global latest_frame_jpg, latest_person_count, running, latest_people_report
+    global latest_frame_jpg, latest_person_count, running, latest_people_report, latest_crowd_conflict
     cap = cv2.VideoCapture(camera_index, camera_backend)
     if not cap.isOpened():
         cap.release()
         cap = cv2.VideoCapture(camera_index)
 
-    # set resolution (optional)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
     print("Camera capture loop started.")
     while running:
         ret, frame = cap.read()
         if not ret or frame is None:
             time.sleep(0.05)
             continue
-
-        annotated_bgr, cnt, people = safe_infer_and_annotate(frame)
+        annotated_bgr, cnt, people_report_data, conflict = safe_infer_and_annotate(frame)
         if annotated_bgr is None:
             time.sleep(0.01)
             continue
-
         success, jpeg = cv2.imencode(".jpg", annotated_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
         if not success:
             time.sleep(0.01)
             continue
-
         with frame_lock:
             latest_frame_jpg = jpeg.tobytes()
             latest_person_count = int(cnt)
-            latest_people_report = people.copy()
-
-        # avoid saturating CPU
+            latest_people_report = people_report_data.copy()
+            latest_crowd_conflict = conflict
         time.sleep(0.02)
-
     cap.release()
     print("Camera capture loop stopped.")
 
-# Start capture thread
 t = threading.Thread(target=capture_loop, daemon=True)
 t.start()
 
@@ -464,7 +473,7 @@ def video_feed():
             if frame is None:
                 time.sleep(0.05)
                 continue
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n")
+            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"+frame+b"\r\n")
             time.sleep(0.02)
     return Response(generator(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
@@ -474,10 +483,18 @@ def count():
     with frame_lock:
         cnt = latest_person_count
         people = latest_people_report.copy() if isinstance(latest_people_report, list) else []
-    alert_flag = True if cnt > 5 else False
+        crowd_conflict_state = latest_crowd_conflict
+
+    alert_flag = cnt > ANOMALY_CROWD_COUNT or crowd_conflict_state
+    if not alert_flag:
+        for p in people:
+            if p.get("anomaly"):
+                alert_flag = True
+                break
     return jsonify({
         "persons": cnt,
         "alert": alert_flag,
+        "crowd_conflict": crowd_conflict_state,
         "timestamp": int(time.time()),
         "people": people
     })
@@ -491,47 +508,41 @@ def snapshot():
         return ("", 503)
     return Response(frame, mimetype="image/jpeg")
 
-# ------------- Auth routes -------------
-@app.route("/register", methods=["GET", "POST"])
+# ---------------- Auth ----------------
+@app.route("/register", methods=["GET","POST"])
 def register():
-    if request.method == "POST":
-        email = request.form.get("email", "").lower()
-        pwd = request.form.get("password", "")
+    if request.method=="POST":
+        email = request.form.get("email","").lower()
+        pwd = request.form.get("password","")
         if not email or not pwd:
-            flash("Email and password required.", "error")
+            flash("Email and password required.","error")
             return redirect(url_for("register"))
-
         conn = init_db_connection()
         try:
-            conn.execute("INSERT INTO users (email, password) VALUES (?, ?)",
-                         (email, generate_password_hash(pwd)))
+            conn.execute("INSERT INTO users (email,password) VALUES (?,?)", (email, generate_password_hash(pwd)))
             conn.commit()
-            flash("Registered — log in.", "success")
+            flash("Registered — log in.","success")
             return redirect(url_for("login"))
         except sqlite3.IntegrityError:
-            flash("Email already used.", "error")
+            flash("Email already used.","error")
         finally:
             conn.close()
-
     return render_template("register.html")
 
-@app.route("/login", methods=["GET", "POST"])
+@app.route("/login", methods=["GET","POST"])
 def login():
-    if request.method == "POST":
-        email = request.form.get("email", "").lower()
-        pwd = request.form.get("password", "")
+    if request.method=="POST":
+        email = request.form.get("email","").lower()
+        pwd = request.form.get("password","")
         conn = init_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT * FROM users WHERE email=?", (email,))
+        cur.execute("SELECT * FROM users WHERE email=?",(email,))
         row = cur.fetchone()
         conn.close()
-
         if row and check_password_hash(row["password"], pwd):
             session["user_email"] = email
             return redirect(url_for("dashboard"))
-
-        flash("Invalid email or password.", "error")
-
+        flash("Invalid email or password.","error")
     return render_template("login.html")
 
 @app.route("/logout")
@@ -544,7 +555,7 @@ def shutdown():
     running = False
     t.join(timeout=2)
 
-if __name__ == "__main__":
+if __name__=="__main__":
     try:
         print(f"Running on http://{HOST}:{PORT}")
         app.run(host=HOST, port=PORT, threaded=True)
