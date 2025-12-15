@@ -12,6 +12,7 @@ from ultralytics import YOLO
 # ---------------- Config ----------------
 APP_SECRET = os.environ.get("FLASK_SECRET", "change_this_secret")
 DB_PATH = "users.db"
+HISTORY_DB_PATH = "history.db" # 🔥 NEW: Separate DB for track history
 MODEL_PATH = os.environ.get("YOLO_MODEL", "yolov8n.pt")
 IMG_SIZE = int(os.environ.get("IMG_SIZE", "640"))
 HOST = os.environ.get("HOST", "0.0.0.0")
@@ -25,8 +26,8 @@ ANOMALY_LOITERING_SPEED = float(os.environ.get("ANOMALY_LOITERING_SPEED", 5.0))
 ANOMALY_LOITERING_DURATION = float(os.environ.get("ANOMALY_LOITERING_DURATION", 3.0))
 ANOMALY_STAMPEDE_SPEED = float(os.environ.get("ANOMALY_STAMPEDE_SPEED", 150.0))
 ANOMALY_CROWD_COUNT = int(os.environ.get("ANOMALY_CROWD_COUNT", 6))
-ANOMALY_CONFLICT_RATIO = float(os.environ.get("ANOMALY_CONFLICT_RATIO", 0.25))  # More sensitive
-ANOMALY_DENSITY_THRESHOLD = int(os.environ.get("ANOMALY_DENSITY_THRESHOLD", 10))  # New: for very dense crowd
+ANOMALY_CONFLICT_RATIO = float(os.environ.get("ANOMALY_CONFLICT_RATIO", 0.25))
+ANOMALY_DENSITY_THRESHOLD = int(os.environ.get("ANOMALY_DENSITY_THRESHOLD", 10))
 
 # ---------------- App & shared state ----------------
 app = Flask(__name__)
@@ -45,6 +46,7 @@ _tracks_lock = threading.Lock()
 
 # ---------------- Database ----------------
 def init_db_and_migrate():
+    # 1. Users DB Initialization (users.db)
     need_create = False
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -85,7 +87,44 @@ def init_db_and_migrate():
         conn.commit()
     conn.close()
 
+    # 2. 🔥 History DB Initialization (history.db)
+    h_conn = sqlite3.connect(HISTORY_DB_PATH)
+    h_cur = h_conn.cursor()
+    h_cur.execute("""
+        CREATE TABLE IF NOT EXISTS tracks_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            track_id INTEGER NOT NULL,
+            timestamp REAL NOT NULL,
+            centroid_x INTEGER NOT NULL,
+            centroid_y INTEGER NOT NULL,
+            speed_px_s REAL,
+            direction TEXT,
+            anomaly_reason TEXT
+        )
+    """)
+    h_conn.commit()
+    h_conn.close()
+
 init_db_and_migrate()
+
+# 🔥 NEW: History Logging Function
+def _log_track_data(track_id, ts, centroid_x, centroid_y, speed, direction, anomaly_reason):
+    """Logs the track data into the history database."""
+    try:
+        conn = sqlite3.connect(HISTORY_DB_PATH)
+        conn.execute("""
+            INSERT INTO tracks_history (track_id, timestamp, centroid_x, centroid_y, speed_px_s, direction, anomaly_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            track_id, ts, centroid_x, centroid_y, speed, direction, anomaly_reason
+        ))
+        conn.commit()
+    except Exception as e:
+        print(f"Error logging track data for ID {track_id}: {e}")
+    finally:
+        if 'conn' in locals() and conn:
+            conn.close()
+
 
 # ---------------- Load YOLO ----------------
 print("Loading YOLO model:", MODEL_PATH)
@@ -349,6 +388,17 @@ def safe_infer_and_annotate(frame):
         with _tracks_lock:
             if tr: tr["anomaly_reason"] = anomaly_reason
 
+        # 🔥 NEW: Log track data to database
+        _log_track_data(
+            track_id=chosen_tid,
+            ts=now,
+            centroid_x=cx,
+            centroid_y=cy,
+            speed=round(float(speed_px_s), 2),
+            direction=direction,
+            anomaly_reason=anomaly_reason if is_anomaly else None
+        )
+
         if direction in directions_map:
             directions_map[direction] += 1
         vx_sum += vx
@@ -448,6 +498,11 @@ def init_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+def init_history_db_connection(): # 🔥 NEW: History DB connection helper
+    conn = sqlite3.connect(HISTORY_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 def login_required(f):
     from functools import wraps
     @wraps(f)
@@ -507,6 +562,49 @@ def snapshot():
     if frame is None:
         return ("", 503)
     return Response(frame, mimetype="image/jpeg")
+
+# 🔥 NEW: History Page Route
+@app.route("/history")
+@login_required
+def history_page():
+    # Fetch initial history data (e.g., last 24 hours of data)
+    one_day_ago = time.time() - (24 * 60 * 60)
+    conn = init_history_db_connection()
+    # Select track history, ordered by timestamp descending
+    cur = conn.execute("""
+        SELECT * FROM tracks_history WHERE timestamp > ? ORDER BY timestamp DESC
+    """, (one_day_ago,))
+    history_rows = cur.fetchall()
+    conn.close()
+
+    history_data = []
+    for row in history_rows:
+        history_data.append({
+            "track_id": row["track_id"],
+            "timestamp": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(row["timestamp"])),
+            "centroid": f'({row["centroid_x"]}, {row["centroid_y"]})',
+            "speed": f'{round(row["speed_px_s"], 2)} px/s',
+            "direction": row["direction"],
+            "anomaly": row["anomaly_reason"] if row["anomaly_reason"] else "No"
+        })
+
+    return render_template("history.html", history_data=history_data)
+
+# 🔥 NEW: History Data API Endpoint (Optional, but good practice)
+@app.route("/history/data")
+@login_required
+def history_data_api():
+    # You can implement filtering here (e.g., by track_id, time range)
+    limit = request.args.get('limit', 100, type=int)
+    conn = init_history_db_connection()
+    cur = conn.execute("""
+        SELECT * FROM tracks_history ORDER BY timestamp DESC LIMIT ?
+    """, (limit,))
+    history_rows = [dict(row) for row in cur.fetchall()]
+    conn.close()
+
+    return jsonify(history_rows)
+
 
 # ---------------- Auth ----------------
 @app.route("/register", methods=["GET","POST"])

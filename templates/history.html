@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Person Detection — History</title>
+
+<style>
+body{font-family:Arial, Helvetica, sans-serif;background:#f4f6f8;margin:0;padding:24px}
+.container{max-width:1100px;margin:0 auto}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;gap:12px}
+h1{font-size:20px;margin:0}
+.header-right{display:flex;align-items:center;gap:10px}
+.btn{padding:8px 12px;border-radius:8px;border:none;cursor:pointer;background:#1f6feb;color:#fff}
+.btn.logout{background:#e53e3e}
+.btn.back{background:#333}
+.history-table-container{background:#fff;padding:20px;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1)}
+.history-table{width:100%;border-collapse:collapse;font-size:14px}
+.history-table th,.history-table td{padding:12px 15px;border-bottom:1px solid #eee;text-align:left}
+.history-table th{background:#e9ecef;font-weight:bold;color:#495057;cursor:pointer}
+.anomaly-flag{color:#e53e3e;font-weight:bold}
+.normal-status{color:#28a745;font-weight:bold}
+</style>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sorttable/2.0.0/sorttable.js"></script>
+
+</head>
+
+<body>
+<div class="container">
+    <header>
+        <h1>Track History Log</h1>
+        <div class="header-right">
+            <a href="/" style="text-decoration: none;">
+                <button class="btn back">← Dashboard</button>
+            </a>
+            <a href="/logout"><button class="btn logout">Logout</button></a>
+        </div>
+    </header>
+
+    <div class="history-table-container">
+        <h2>Last 24 Hours of Tracked Events</h2>
+        <table class="history-table sortable">
+            <thead>
+                <tr>
+                    <th onclick="sorttable.innerSortFunction(this, 0)">Track ID</th>
+                    <th onclick="sorttable.innerSortFunction(this, 1)">Timestamp</th>
+                    <th onclick="sorttable.innerSortFunction(this, 2)">Speed</th>
+                    <th onclick="sorttable.innerSortFunction(this, 3)">Direction</th>
+                    <th onclick="sorttable.innerSortFunction(this, 4)">Anomaly Status</th>
+                    <th onclick="sorttable.innerSortFunction(this, 5)">Centroid (x, y)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in history_data %}
+                <tr>
+                    <td>{{ entry.track_id }}</td>
+                    <td>{{ entry.timestamp }}</td>
+                    <td>{{ entry.speed }}</td>
+                    <td>{{ entry.direction }}</td>
+                    <td>
+                        {% if entry.anomaly != 'No' %}
+                            <span class="anomaly-flag">{{ entry.anomaly }}</span>
+                        {% else %}
+                            <span class="normal-status">Normal</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ entry.centroid }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        {% if not history_data %}
+        <p style="text-align: center; color: #6c757d; margin-top: 40px;">No track history data found in the last 24 hours.</p>
+        {% endif %}
+    </div>
+
+</div>
+
+</body>
+</html>

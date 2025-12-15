@@ -1,198 +1,196 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Person Detection — Dashboard</title>
-  <style>
-    body{font-family:Arial, Helvetica, sans-serif;background:#f4f6f8;margin:0;padding:24px}
-    .container{max-width:1100px;margin:0 auto}
-    header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px}
-    h1{font-size:20px;margin:0}
-    .header-right{display:flex;align-items:center;gap:10px}
-    #videoWrap{background:#000;border-radius:8px;overflow:hidden;height:540px;display:flex;justify-content:center;align-items:center;position:relative;transition:all .25s ease}
-    #stream{width:100%;height:100%;object-fit:cover;display:block}
-    #overlay{position:absolute;left:0;top:0;pointer-events:none}
-    .controls{display:flex;gap:12px;align-items:center;margin-top:10px}
-    .countBox{background:#fff;padding:12px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.08)}
-    .btn{padding:8px 12px;border-radius:8px;border:none;cursor:pointer;background:#1f6feb;color:#fff}
-    .btn.logout{background:#e53e3e}
-    .btn.alt{background:#6b7280}
-    .modal{position:fixed;left:0;top:0;width:100%;height:100%;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.45);z-index:9999}
-    .modal.show{display:flex}
-    .modal-card{background:#fff;padding:20px;border-radius:8px;max-width:420px;text-align:center}
-    .modal-card h2{margin:0 0 8px}
-    .mini{position:fixed !important;width:320px !important;height:180px !important;bottom:18px;right:18px;z-index:9998;border-radius:8px;box-shadow:0 12px 40px rgba(2,6,23,0.35);transform:translateZ(0)}
-    .overlay-full{position:fixed !important;left:0 !important;top:0 !important;width:100vw !important;height:100vh !important;z-index:9997;border-radius:0 !important}
-    
-    /* FIX APPLIED BELOW: Added space after the opening bracket to prevent Jinja syntax error */
-    @media (max-width:980px){ #videoWrap{height:360px}.mini{width:220px;height:140px}}
-    
-    .people-table{margin-top:10px;background:#fff;padding:10px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.06);font-size:13px}
-    .people-table table{width:100%;border-collapse:collapse}
-    .people-table th,.people-table td{text-align:left;padding:6px 8px;border-bottom:1px solid #f0f0f0}
-    .anomaly-flag{color:#e53e3e;font-weight:bold}
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Person Detection — Dashboard</title>
+
+<style>
+body{font-family:Arial, Helvetica, sans-serif;background:#f4f6f8;margin:0;padding:24px}
+.container{max-width:1100px;margin:0 auto}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px}
+h1{font-size:20px;margin:0}
+.header-right{display:flex;align-items:center;gap:10px}
+#videoWrap{background:#000;border-radius:8px;overflow:hidden;height:540px;display:flex;justify-content:center;align-items:center;position:relative}
+/* New style for fullscreen mode */
+#videoWrap:fullscreen {
+    height: 100vh; /* Use full viewport height */
+    width: 100vw;  /* Use full viewport width */
+    max-width: none; /* Override max-width */
+    border-radius: 0;
+}
+#stream{width:100%;height:100%;object-fit:cover}
+#overlay{position:absolute;left:0;top:0;pointer-events:none}
+.controls{display:flex;gap:12px;margin-top:10px}
+.countBox{background:#fff;padding:12px;border-radius:8px}
+.btn{padding:8px 12px;border-radius:8px;border:none;cursor:pointer;background:#1f6feb;color:#fff}
+.btn.logout{background:#e53e3e}
+/* New style for the fullscreen button to match others */
+.btn.fullscreen{background:#5cb85c} 
+.modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45)}
+.modal.show{display:flex}
+.modal-card{background:#fff;padding:20px;border-radius:8px;max-width:420px;text-align:center}
+.people-table{margin-top:10px;background:#fff;padding:10px;border-radius:8px;font-size:13px}
+.people-table table{width:100%;border-collapse:collapse}
+.people-table th,.people-table td{padding:6px 8px;border-bottom:1px solid #eee}
+.anomaly-flag{color:#e53e3e;font-weight:bold}
+</style>
 </head>
+
 <body>
-  <div class="container">
-    <header>
-      <h1>Person Detection Dashboard</h1>
-      <div class="header-right">
-        <div style="font-size:13px;color:#333">Signed in as: <strong>{{ session.get('user_email') }}</strong></div>
-        <button id="minBtn" class="btn alt" title="Mini screen">Min</button>
-        <button id="fullBtn" class="btn" title="Full screen">Full</button>
-        <a href="{{ url_for('snapshot') }}" target="_blank"><button class="btn alt" title="Snapshot">Snapshot</button></a>
-        <a href="{{ url_for('logout') }}"><button class="btn logout" title="Logout">Logout</button></a>
-      </div>
-    </header>
+<div class="container">
+<header>
+<h1>Person Detection Dashboard</h1>
+<div class="header-right">
+    <a href="/history" style="text-decoration: none;">
+        <button class="btn" style="background: #333; margin-right: 10px;">History</button>
+    </a>
+    <button id="fullscreenBtn" class="btn fullscreen">Full Screen</button>
+    <a href="/logout"><button class="btn logout">Logout</button></a>
+</div>
+</header>
 
-    <section id="main">
-      <div id="videoWrap" aria-live="polite">
-        <img id="stream" src="{{ url_for('video_feed') }}" alt="Live stream">
-        <canvas id="overlay"></canvas>
-      </div>
-      <div class="controls">
-        <div class="countBox">Persons detected: <strong id="count">0</strong></div>
-        <div class="countBox" id="conflictBox" style="background:#ffdddd; color:#e53e3e; display:none;">
-            <strong>⚠️ Crowd Conflict Detected!</strong>
-        </div>
-      </div>
-      <div class="people-table" id="peopleTable" style="display:none">
-        <strong>Live people & Tracking Status</strong>
-        <table>
-          <thead><tr><th>ID</th><th>Speed (px/s)</th><th>Direction</th><th>Centroid</th><th>Anomaly</th></tr></thead>
-          <tbody id="peopleBody"></tbody>
-        </table>
-      </div>
-    </section>
-  </div>
+<div id="videoWrap">
+<img id="stream" src="/video">
+<canvas id="overlay"></canvas>
+</div>
 
-  <div id="alertModal" class="modal" role="dialog" aria-hidden="true">
-    <div class="modal-card">
-      <h2>⚠️ Alert</h2>
-      <p id="alertMessage">Alert</p>
-      <div style="margin-top:12px">
-        <button id="dismissBtn" class="btn">Dismiss</button>
-      </div>
-    </div>
-  </div>
+<div class="controls">
+<div class="countBox">Persons: <strong id="count">0</strong></div>
+<div class="countBox" id="conflictBox" style="display:none;color:#e53e3e">
+⚠ Crowd Conflict Detected
+</div>
+</div>
 
-  <audio id="alertSound" preload="auto">
-    <source src="{{ url_for('static', filename='snd/alert.mp3') }}" type="audio/mpeg">
-  </audio>
+<div class="people-table" id="peopleTable" style="display:none">
+<table>
+<thead>
+<tr><th>ID</th><th>Speed</th><th>Direction</th><th>Anomaly</th></tr>
+</thead>
+<tbody id="peopleBody"></tbody>
+</table>
+</div>
+</div>
 
-  <script>
-    const FRAME_W = 1280, FRAME_H = 720, POLL_MS = 500;
-    const img = document.getElementById('stream');
-    const canvas = document.getElementById('overlay');
-    const ctx = canvas.getContext('2d');
-    const countEl = document.getElementById('count');
-    const peopleTable = document.getElementById('peopleTable');
-    const peopleBody = document.getElementById('peopleBody');
-    const conflictBox = document.getElementById('conflictBox');
-    const alertModal = document.getElementById('alertModal');
-    const alertMessage = document.getElementById('alertMessage');
-    const videoWrap = document.getElementById('videoWrap');
-    const fullBtn = document.getElementById('fullBtn');
-    const minBtn = document.getElementById('minBtn');
-    let isMini = false, overlayFallback = false;
+<div id="alertModal" class="modal">
+<div class="modal-card">
+<h2>⚠ Alert</h2>
+<p id="alertMessage"></p>
+<button id="dismissBtn" class="btn">Dismiss</button>
+</div>
+</div>
 
-    function mapPoint(cx, cy) {
-      const sx = canvas.width / FRAME_W, sy = canvas.height / FRAME_H;
-      return [Math.round(cx * sx), Math.round(cy * sy)];
+<audio id="alertSound">
+<source src="/static/snd/alert.mp3" type="audio/mpeg">
+</audio>
+
+<script>
+const POLL_MS = 500;
+const LOITER_CONFIRM_MS = 8000;   // 🔥 must persist 8s
+const ALERT_COOLDOWN_MS = 20000;
+
+const anomalyTimers = {};
+let lastGlobalAlert = 0;
+
+const countEl = document.getElementById('count');
+const peopleBody = document.getElementById('peopleBody');
+const peopleTable = document.getElementById('peopleTable');
+const conflictBox = document.getElementById('conflictBox');
+const alertModal = document.getElementById('alertModal');
+const alertMessage = document.getElementById('alertMessage');
+// Get new elements
+const videoWrap = document.getElementById('videoWrap');
+const fullscreenBtn = document.getElementById('fullscreenBtn');
+
+async function poll(){
+  try{
+    const res = await fetch('/count',{cache:'no-store'});
+    const data = await res.json();
+
+    countEl.textContent = data.persons ?? 0;
+    conflictBox.style.display = data.crowd_conflict ? 'block' : 'none';
+
+    peopleBody.innerHTML='';
+    if(Array.isArray(data.people) && data.people.length){
+      peopleTable.style.display='block';
+
+      data.people.forEach(p=>{
+        const tr=document.createElement('tr');
+        tr.innerHTML=`
+          <td>${p.id}</td>
+          <td>${p.speed_px_s}</td>
+          <td>${p.direction}</td>
+          <td>${p.anomaly ? '<span class="anomaly-flag">'+p.anomaly_reason+'</span>' : 'No'}</td>
+        `;
+        peopleBody.appendChild(tr);
+
+        // 🔥 LOITER CONFIRMATION (FIX)
+        if(p.anomaly && p.anomaly_reason === 'LOITERING'){
+          if(!anomalyTimers[p.id]) anomalyTimers[p.id]=Date.now();
+          const held = Date.now() - anomalyTimers[p.id];
+
+          if(held > LOITER_CONFIRM_MS){
+            triggerAlert(`Loitering detected (ID ${p.id})`);
+          }
+        } else {
+          delete anomalyTimers[p.id];
+        }
+      });
+    } else {
+      peopleTable.style.display='none';
+    }
+
+    if(data.crowd_conflict){
+      triggerAlert('Crowd conflict detected!');
+    }
+  }catch(e){console.error(e);}
+}
+
+function triggerAlert(msg){
+  const now = Date.now();
+  if(now - lastGlobalAlert < ALERT_COOLDOWN_MS) return;
+
+  lastGlobalAlert = now;
+  alertMessage.textContent = msg;
+  alertModal.classList.add('show');
+  document.getElementById('alertSound')?.play().catch(()=>{});
+}
+
+document.getElementById('dismissBtn').onclick=()=>{
+  alertModal.classList.remove('show');
+};
+
+// --- NEW FULLSCREEN FUNCTIONALITY ---
+
+function toggleFullscreen() {
+    if (document.fullscreenElement) {
+        // Exit fullscreen
+        document.exitFullscreen().catch(err => {
+            console.error(`Error attempting to exit fullscreen mode: ${err.message}`);
+        });
+    } else {
+        // Enter fullscreen on the videoWrap element
+        videoWrap.requestFullscreen().catch(err => {
+            console.error(`Error attempting to enable fullscreen mode: ${err.message}`);
+        });
     }
+}
 
-    function drawOverlays(people) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      people.forEach(p => {
-        if (!p || !p.centroid) return;
-        const [cx, cy] = p.centroid;
-        const [mx, my] = mapPoint(cx, cy);
-        const isAnomaly = p.anomaly;
-        const color = isAnomaly ? 'rgba(255,0,0,0.9)' : 'rgba(0,255,0,0.9)';
-        const strokeColor = isAnomaly ? 'rgba(255,0,0,0.95)' : 'rgba(0,255,0,0.95)';
-        
-        ctx.beginPath(); ctx.fillStyle=color; ctx.arc(mx,my,Math.max(6,Math.round(6*(canvas.width/640))),0,Math.PI*2); ctx.fill();
-        
-        let dx=0, dy=0; const dir = (p.direction||'').toUpperCase(); const arrowLen=Math.max(18,Math.round(18*(canvas.width/640)));
-        if(dir==='LEFT'){dx=-arrowLen;} else if(dir==='RIGHT'){dx=arrowLen;} else if(dir==='UP'){dy=-arrowLen;} else if(dir==='DOWN'){dy=arrowLen;} else{dx=arrowLen/2;}
-        ctx.beginPath(); ctx.strokeStyle=strokeColor; ctx.lineWidth=2; ctx.moveTo(mx,my); ctx.lineTo(mx+dx,my+dy); ctx.stroke();
-        
-        let label = `ID:${p.id??'—'} ${p.speed_px_s??0}px/s ${p.direction??''}`;
-        if(isAnomaly){label+=` (${p.anomaly_reason||'Anomaly'})`;}
-        ctx.font=`${12*(canvas.width/640)}px Arial`;
-        const textW=ctx.measureText(label).width, pad=6;
-        let lx=mx-(textW/2);
-        if (lx < 6) lx = 6;
-        if (lx + textW + pad > canvas.width) lx = canvas.width - textW - pad;
-        const ly=Math.max(14,my-(arrowLen+14));
-        ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(lx - (pad/2), ly - 12, textW + pad, 18);
-        ctx.fillStyle='#fff'; ctx.fillText(label, lx, ly);
-      });
-    }
+// Event listener for the new button
+fullscreenBtn.addEventListener('click', toggleFullscreen);
 
-    async function pollAndUpdate() {
-      try{
-        const res = await fetch('/count',{cache:'no-store'});
-        const data = await res.json();
-        countEl.innerText = data.persons??0;
-        conflictBox.style.display = data.crowd_conflict ? 'block' : 'none';
-        const individualAnomaly = Array.isArray(data.people) && data.people.some(p=>p.anomaly);
-        
-        if(data.alert || individualAnomaly || data.crowd_conflict){
-          let reason='High crowd detected';
-          if(data.crowd_conflict) reason='Crowd Conflict/Backflow detected!';
-          else if(individualAnomaly){
-            const anomalyReasons = data.people.filter(p=>p.anomaly).map(p=>`ID ${p.id}: ${p.anomaly_reason||'Anomaly'}`).join('; ');
-            reason = `Individual Anomaly: ${anomalyReasons}`;
-          }
-          alertMessage.innerText = reason;
-          const now = Date.now();
-          if(!window._alertShownAt || (now - window._alertShownAt) > 20000){
-            window._alertShownAt = now;
-            const s = document.getElementById('alertSound'); if(s){ s.play().catch(()=>{}); }
-            alertModal.classList.add('show');
-          }
-        }
-        if(Array.isArray(data.people) && data.people.length > 0){
-          peopleTable.style.display='block';
-          drawOverlays(data.people);
-          peopleBody.innerHTML='';
-          data.people.forEach(p=>{
-            const tr=document.createElement('tr');
-            ['id','speed_px_s','direction','centroid'].forEach(k=>{
-              const td=document.createElement('td');
-              td.innerText = (k==='centroid') ? (p.centroid ? `${p.centroid[0]}, ${p.centroid[1]}` : '—') : (p[k] ?? '—');
-              tr.appendChild(td);
-            });
-            const anomTd=document.createElement('td');
-            anomTd.innerHTML = p.anomaly ? `<span class="anomaly-flag">${p.anomaly_reason||'YES'}</span>` : 'No';
-            tr.appendChild(anomTd);
-            peopleBody.appendChild(tr);
-          });
-        } else {
-          peopleTable.style.display='none';
-          ctx.clearRect(0,0,canvas.width,canvas.height);
-        }
-      }catch(e){console.error(e);}
+// Update button text when fullscreen state changes
+document.addEventListener('fullscreenchange', () => {
+    if (document.fullscreenElement) {
+        fullscreenBtn.textContent = 'Exit Full Screen';
+    } else {
+        fullscreenBtn.textContent = 'Full Screen';
     }
+});
 
-    function setupOverlay(){
-      const rect = img.getBoundingClientRect();
-      canvas.width = rect.width; canvas.height = rect.height;
-      canvas.style.left = img.offsetLeft + 'px'; canvas.style.top = img.offsetTop + 'px';
-    }
-    img.addEventListener('load', setupOverlay);
-    window.addEventListener('resize', setupOverlay);
-    setInterval(pollAndUpdate, POLL_MS);
-    document.getElementById('dismissBtn').addEventListener('click', ()=>{ alertModal.classList.remove('show'); });
-    
-    fullBtn.addEventListener('click', ()=>{
-        if(!document.fullscreenElement) videoWrap.requestFullscreen().catch(()=>{videoWrap.classList.add('overlay-full');});
-        else document.exitFullscreen();
-    });
-    minBtn.addEventListener('click', ()=>{ videoWrap.classList.toggle('mini'); });
-  </script>
+// --- END NEW FULLSCREEN FUNCTIONALITY ---
+
+setInterval(poll, POLL_MS);
+</script>
 </body>
 </html>
