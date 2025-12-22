@@ -15,19 +15,35 @@
         input {
             width: 100%; padding: 10px; margin: 10px 0;
             border-radius: 5px; border: 1px solid #aaa;
+            box-sizing: border-box;
         }
         .btn {
             width: 100%; padding: 10px;
             background: #007bff; color: #fff;
             border: none; border-radius: 5px; cursor: pointer;
+            font-size: 16px;
         }
         .btn:hover { background: #0056b3; }
         a { text-decoration: none; color: #007bff; }
+
+        /* Messages */
+        .msg { padding: 10px; margin-bottom: 10px; border-radius: 5px; font-size: 14px; text-align: center;}
+        .msg.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .msg.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
     </style>
 </head>
 <body>
     <div class="box">
         <h2>Login</h2>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="msg {{ category }}">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
         <form method="POST">
             <input name="email" type="email" placeholder="Email" required>
             <input name="password" type="password" placeholder="Password" required>

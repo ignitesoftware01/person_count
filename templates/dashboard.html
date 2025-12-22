@@ -6,189 +6,263 @@
 <title>Person Detection — Dashboard</title>
 
 <style>
-body{font-family:Arial, Helvetica, sans-serif;background:#f4f6f8;margin:0;padding:24px}
-.container{max-width:1100px;margin:0 auto}
-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px}
-h1{font-size:20px;margin:0}
-.header-right{display:flex;align-items:center;gap:10px}
-#videoWrap{background:#000;border-radius:8px;overflow:hidden;height:540px;display:flex;justify-content:center;align-items:center;position:relative}
-/* New style for fullscreen mode */
-#videoWrap:fullscreen {
-    height: 100vh; /* Use full viewport height */
-    width: 100vw;  /* Use full viewport width */
-    max-width: none; /* Override max-width */
-    border-radius: 0;
+body{font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:#f0f2f5; margin:0; padding:24px; color: #333;}
+.container{max-width:1200px; margin:0 auto;}
+
+header{display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; background: white; padding: 15px 20px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);}
+h1{font-size:22px; margin:0; color: #2d3748;}
+.header-right{display:flex; align-items:center; gap:10px;}
+
+/* Video Wrapper */
+#videoWrap{
+    background:#000; border-radius:12px; overflow:hidden; 
+    height:540px; display:flex; justify-content:center; align-items:center; 
+    position:relative; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
 }
-#stream{width:100%;height:100%;object-fit:cover}
-#overlay{position:absolute;left:0;top:0;pointer-events:none}
-.controls{display:flex;gap:12px;margin-top:10px}
-.countBox{background:#fff;padding:12px;border-radius:8px}
-.btn{padding:8px 12px;border-radius:8px;border:none;cursor:pointer;background:#1f6feb;color:#fff}
-.btn.logout{background:#e53e3e}
-/* New style for the fullscreen button to match others */
-.btn.fullscreen{background:#5cb85c} 
-.modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45)}
-.modal.show{display:flex}
-.modal-card{background:#fff;padding:20px;border-radius:8px;max-width:420px;text-align:center}
-.people-table{margin-top:10px;background:#fff;padding:10px;border-radius:8px;font-size:13px}
-.people-table table{width:100%;border-collapse:collapse}
-.people-table th,.people-table td{padding:6px 8px;border-bottom:1px solid #eee}
-.anomaly-flag{color:#e53e3e;font-weight:bold}
+#videoWrap:fullscreen {
+    height: 100vh; width: 100vw; max-width: none; border-radius: 0;
+}
+#stream{width:100%; height:100%; object-fit:cover;}
+#overlay{position:absolute; left:0; top:0; pointer-events:none;}
+
+/* Stats Panel Layout */
+.stats-panel {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin-top: 15px;
+}
+
+.stat-card {
+    background: #fff; padding: 15px; border-radius: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    display: flex; align-items: center; justify-content: space-between;
+}
+
+.stat-title { font-size: 14px; color: #718096; margin-bottom: 4px; }
+.stat-value { font-size: 24px; font-weight: bold; color: #1a202c; }
+
+/* Density Circle Indicator */
+.density-widget { display: flex; align-items: center; gap: 15px; }
+.density-circle {
+    width: 45px; height: 45px; border-radius: 50%;
+    background: #eee; border: 4px solid #ddd;
+    transition: background 0.3s ease, border-color 0.3s ease;
+}
+.density-text-wrap { display: flex; flex-direction: column; }
+.density-label { font-size: 13px; color: #718096; }
+.density-val { font-weight: bold; font-size: 18px; }
+
+/* Buttons */
+.btn{padding:8px 16px; border-radius:6px; border:none; cursor:pointer; font-weight: 500; font-size: 14px; transition: opacity 0.2s;}
+.btn:hover { opacity: 0.9; }
+.btn-primary { background:#3182ce; color:#fff; }
+.btn-dark { background: #2d3748; color: #fff; }
+.btn.logout{background:#e53e3e; color: white;}
+.btn.fullscreen{background:#38a169; color: white;}
+
+/* Alert Modal */
+.modal{position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.5); z-index: 999;}
+.modal.show{display:flex;}
+.modal-card{background:#fff; padding:25px; border-radius:12px; max-width:400px; text-align:center; box-shadow: 0 10px 15px rgba(0,0,0,0.1);}
+
+/* Table Styling */
+.people-table-container {
+    margin-top: 20px; background: #fff; padding: 0;
+    border-radius: 12px; overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    display: none;
+}
+.people-table { width: 100%; border-collapse: collapse; }
+.people-table thead { background: #f7fafc; border-bottom: 2px solid #edf2f7; }
+.people-table th { text-align: left; padding: 12px 20px; color: #4a5568; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.people-table td { padding: 12px 20px; border-bottom: 1px solid #edf2f7; color: #2d3748; font-size: 14px; }
+.people-table tr:last-child td { border-bottom: none; }
+.anomaly-flag { 
+    background: #fed7d7; color: #c53030; padding: 4px 8px; 
+    border-radius: 4px; font-size: 12px; font-weight: bold; 
+    display: inline-block;
+}
 </style>
 </head>
 
 <body>
 <div class="container">
-<header>
-<h1>Person Detection Dashboard</h1>
-<div class="header-right">
-    <a href="/history" style="text-decoration: none;">
-        <button class="btn" style="background: #333; margin-right: 10px;">History</button>
-    </a>
-    <button id="fullscreenBtn" class="btn fullscreen">Full Screen</button>
-    <a href="/logout"><button class="btn logout">Logout</button></a>
-</div>
-</header>
+    <header>
+        <h1>Person Detection Dashboard</h1>
+        <div class="header-right">
+            <a href="/history"><button class="btn btn-dark">History</button></a>
+            <button id="fullscreenBtn" class="btn fullscreen">Full Screen</button>
+            <a href="/logout"><button class="btn logout">Logout</button></a>
+        </div>
+    </header>
 
-<div id="videoWrap">
-<img id="stream" src="/video">
-<canvas id="overlay"></canvas>
-</div>
+    <div id="videoWrap">
+        <img id="stream" src="/video">
+        <canvas id="overlay"></canvas>
+    </div>
 
-<div class="controls">
-<div class="countBox">Persons: <strong id="count">0</strong></div>
-<div class="countBox" id="conflictBox" style="display:none;color:#e53e3e">
-⚠ Crowd Conflict Detected
-</div>
-</div>
+    <div class="stats-panel">
+        <div class="stat-card">
+            <div>
+                <div class="stat-title">Total Persons</div>
+                <div class="stat-value" id="count">0</div>
+            </div>
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#3182ce" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+        </div>
 
-<div class="people-table" id="peopleTable" style="display:none">
-<table>
-<thead>
-<tr><th>ID</th><th>Speed</th><th>Direction</th><th>Anomaly</th></tr>
-</thead>
-<tbody id="peopleBody"></tbody>
-</table>
-</div>
+        <div class="stat-card">
+            <div class="density-widget">
+                <div id="densityCircle" class="density-circle"></div>
+                <div class="density-text-wrap">
+                    <span class="density-label">Density Level</span>
+                    <span class="density-val" id="densityText">0% (Low)</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="stat-card" id="statusCard">
+            <div>
+                <div class="stat-title">System Status</div>
+                <div class="stat-value" id="statusText" style="font-size: 18px; color: green;">Normal</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="people-table-container" id="peopleTableContainer">
+        <table class="people-table">
+            <thead>
+                <tr>
+                    <th>Track ID</th>
+                    <th>Speed (px/s)</th>
+                    <th>Direction</th>
+                    <th>Anomaly Status</th>
+                </tr>
+            </thead>
+            <tbody id="peopleBody"></tbody>
+        </table>
+    </div>
 </div>
 
 <div id="alertModal" class="modal">
-<div class="modal-card">
-<h2>⚠ Alert</h2>
-<p id="alertMessage"></p>
-<button id="dismissBtn" class="btn">Dismiss</button>
-</div>
+    <div class="modal-card">
+        <h2 style="color: #e53e3e; margin-top:0;">⚠ Alert</h2>
+        <p id="alertMessage" style="font-size: 16px; color: #4a5568;"></p>
+        <button id="dismissBtn" class="btn btn-primary" style="width: 100%; margin-top: 15px;">Dismiss</button>
+    </div>
 </div>
 
 <audio id="alertSound">
-<source src="/static/snd/alert.mp3" type="audio/mpeg">
+    <source src="/static/snd/alert.mp3" type="audio/mpeg">
 </audio>
 
 <script>
 const POLL_MS = 500;
-const LOITER_CONFIRM_MS = 8000;   // 🔥 must persist 8s
+const LOITER_CONFIRM_MS = 8000;   
 const ALERT_COOLDOWN_MS = 20000;
 
 const anomalyTimers = {};
 let lastGlobalAlert = 0;
 
 const countEl = document.getElementById('count');
+const densityText = document.getElementById('densityText');
+const densityCircle = document.getElementById('densityCircle');
+const statusText = document.getElementById('statusText');
 const peopleBody = document.getElementById('peopleBody');
-const peopleTable = document.getElementById('peopleTable');
-const conflictBox = document.getElementById('conflictBox');
+const peopleTableContainer = document.getElementById('peopleTableContainer');
 const alertModal = document.getElementById('alertModal');
 const alertMessage = document.getElementById('alertMessage');
-// Get new elements
 const videoWrap = document.getElementById('videoWrap');
 const fullscreenBtn = document.getElementById('fullscreenBtn');
 
 async function poll(){
-  try{
-    const res = await fetch('/count',{cache:'no-store'});
-    const data = await res.json();
+  try{
+    const res = await fetch('/count',{cache:'no-store'});
+    const data = await res.json();
 
-    countEl.textContent = data.persons ?? 0;
-    conflictBox.style.display = data.crowd_conflict ? 'block' : 'none';
+    countEl.textContent = data.persons ?? 0;
 
-    peopleBody.innerHTML='';
-    if(Array.isArray(data.people) && data.people.length){
-      peopleTable.style.display='block';
+    if(data.density_value !== undefined) {
+        densityText.textContent = `${data.density_value}% (${data.density_level})`;
+        densityCircle.style.backgroundColor = data.density_color;
+        densityCircle.style.borderColor = data.density_color; 
+    }
 
-      data.people.forEach(p=>{
-        const tr=document.createElement('tr');
-        tr.innerHTML=`
-          <td>${p.id}</td>
-          <td>${p.speed_px_s}</td>
-          <td>${p.direction}</td>
-          <td>${p.anomaly ? '<span class="anomaly-flag">'+p.anomaly_reason+'</span>' : 'No'}</td>
-        `;
-        peopleBody.appendChild(tr);
+    if(data.crowd_conflict) {
+        statusText.textContent = "⚠ CROWD CONFLICT";
+        statusText.style.color = "#e53e3e";
+    } else if(data.alert) {
+        statusText.textContent = "⚠ Anomaly Detected";
+        statusText.style.color = "#dd6b20";
+    } else {
+        statusText.textContent = "Normal Monitoring";
+        statusText.style.color = "#38a169";
+    }
 
-        // 🔥 LOITER CONFIRMATION (FIX)
-        if(p.anomaly && p.anomaly_reason === 'LOITERING'){
-          if(!anomalyTimers[p.id]) anomalyTimers[p.id]=Date.now();
-          const held = Date.now() - anomalyTimers[p.id];
+    peopleBody.innerHTML='';
+    if(Array.isArray(data.people) && data.people.length){
+      peopleTableContainer.style.display='block';
 
-          if(held > LOITER_CONFIRM_MS){
-            triggerAlert(`Loitering detected (ID ${p.id})`);
-          }
-        } else {
-          delete anomalyTimers[p.id];
-        }
-      });
-    } else {
-      peopleTable.style.display='none';
-    }
+      data.people.forEach(p=>{
+        const tr=document.createElement('tr');
+        const anomalyHtml = p.anomaly 
+            ? `<span class="anomaly-flag">${p.anomaly_reason}</span>` 
+            : '<span style="color:#718096">None</span>';
+            
+        tr.innerHTML=`
+          <td><strong>#${p.id}</strong></td>
+          <td>${p.speed_px_s}</td>
+          <td>${p.direction}</td>
+          <td>${anomalyHtml}</td>
+        `;
+        peopleBody.appendChild(tr);
 
-    if(data.crowd_conflict){
-      triggerAlert('Crowd conflict detected!');
-    }
-  }catch(e){console.error(e);}
+        if(p.anomaly && p.anomaly_reason.includes('LOITERING')){
+          if(!anomalyTimers[p.id]) anomalyTimers[p.id]=Date.now();
+          const held = Date.now() - anomalyTimers[p.id];
+          if(held > LOITER_CONFIRM_MS){
+            triggerAlert(`Loitering detected (ID ${p.id})`);
+          }
+        } else {
+          delete anomalyTimers[p.id];
+        }
+      });
+    } else {
+      peopleTableContainer.style.display='none';
+    }
+
+    if(data.crowd_conflict){
+      triggerAlert('Crowd conflict detected!');
+    }
+  }catch(e){console.error(e);}
 }
 
 function triggerAlert(msg){
-  const now = Date.now();
-  if(now - lastGlobalAlert < ALERT_COOLDOWN_MS) return;
-
-  lastGlobalAlert = now;
-  alertMessage.textContent = msg;
-  alertModal.classList.add('show');
-  document.getElementById('alertSound')?.play().catch(()=>{});
+  const now = Date.now();
+  if(now - lastGlobalAlert < ALERT_COOLDOWN_MS) return;
+  lastGlobalAlert = now;
+  alertMessage.textContent = msg;
+  alertModal.classList.add('show');
+  document.getElementById('alertSound')?.play().catch(()=>{});
 }
 
 document.getElementById('dismissBtn').onclick=()=>{
-  alertModal.classList.remove('show');
+  alertModal.classList.remove('show');
 };
-
-// --- NEW FULLSCREEN FUNCTIONALITY ---
 
 function toggleFullscreen() {
     if (document.fullscreenElement) {
-        // Exit fullscreen
-        document.exitFullscreen().catch(err => {
-            console.error(`Error attempting to exit fullscreen mode: ${err.message}`);
-        });
+        document.exitFullscreen().catch(err => console.error(err));
     } else {
-        // Enter fullscreen on the videoWrap element
-        videoWrap.requestFullscreen().catch(err => {
-            console.error(`Error attempting to enable fullscreen mode: ${err.message}`);
-        });
+        videoWrap.requestFullscreen().catch(err => console.error(err));
     }
 }
 
-// Event listener for the new button
 fullscreenBtn.addEventListener('click', toggleFullscreen);
 
-// Update button text when fullscreen state changes
 document.addEventListener('fullscreenchange', () => {
-    if (document.fullscreenElement) {
-        fullscreenBtn.textContent = 'Exit Full Screen';
-    } else {
-        fullscreenBtn.textContent = 'Full Screen';
-    }
+    fullscreenBtn.textContent = document.fullscreenElement ? 'Exit Full Screen' : 'Full Screen';
 });
-
-// --- END NEW FULLSCREEN FUNCTIONALITY ---
 
 setInterval(poll, POLL_MS);
 </script>
