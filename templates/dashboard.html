@@ -188,8 +188,12 @@ async function poll(){
         densityCircle.style.borderColor = data.density_color; 
     }
 
+    // Status Text Updates
     if(data.crowd_conflict) {
         statusText.textContent = "⚠ CROWD CONFLICT";
+        statusText.style.color = "#e53e3e";
+    } else if(data.persons >= 6) { 
+        statusText.textContent = "⚠ HIGH CROWD (>5)";
         statusText.style.color = "#e53e3e";
     } else if(data.alert) {
         statusText.textContent = "⚠ Anomaly Detected";
@@ -197,6 +201,13 @@ async function poll(){
     } else {
         statusText.textContent = "Normal Monitoring";
         statusText.style.color = "#38a169";
+    }
+
+    // 🔥 POPUP ALERT LOGIC
+    if(data.crowd_conflict){
+        triggerAlert('Crowd conflict detected!');
+    } else if (data.persons >= 6) {
+        triggerAlert(`High Crowd Alert: ${data.persons} people detected!`);
     }
 
     peopleBody.innerHTML='';
@@ -231,9 +242,6 @@ async function poll(){
       peopleTableContainer.style.display='none';
     }
 
-    if(data.crowd_conflict){
-      triggerAlert('Crowd conflict detected!');
-    }
   }catch(e){console.error(e);}
 }
 

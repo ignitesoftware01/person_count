@@ -25,9 +25,12 @@ HISTORY_PRUNE_TIME = float(os.environ.get("HISTORY_PRUNE_TIME", 5.0))
 ANOMALY_LOITERING_SPEED = float(os.environ.get("ANOMALY_LOITERING_SPEED", 5.0))
 ANOMALY_LOITERING_DURATION = float(os.environ.get("ANOMALY_LOITERING_DURATION", 3.0))
 ANOMALY_STAMPEDE_SPEED = float(os.environ.get("ANOMALY_STAMPEDE_SPEED", 150.0))
-ANOMALY_CROWD_COUNT = int(os.environ.get("ANOMALY_CROWD_COUNT", 6))
+
+# 🔥 ALERT CONFIG: Trigger alert if people count starts from 15 (>= 15)
+ANOMALY_CROWD_COUNT = int(os.environ.get("ANOMALY_CROWD_COUNT", 15))
+
 ANOMALY_CONFLICT_RATIO = float(os.environ.get("ANOMALY_CONFLICT_RATIO", 0.25))
-ANOMALY_DENSITY_THRESHOLD = int(os.environ.get("ANOMALY_DENSITY_THRESHOLD", 10))
+ANOMALY_DENSITY_THRESHOLD = int(os.environ.get("ANOMALY_DENSITY_THRESHOLD", 20))
 
 # Density Config (Max capacity for 100% density)
 MAX_CAPACITY = int(os.environ.get("MAX_CAPACITY", 30)) 
@@ -488,7 +491,9 @@ def count():
         crowd_conflict_state = latest_crowd_conflict
         density = latest_density_info.copy()
 
-    alert_flag = cnt > ANOMALY_CROWD_COUNT or crowd_conflict_state
+    # 🔥 NEW: Alert if count is >= 6
+    alert_flag = (cnt >= ANOMALY_CROWD_COUNT) or crowd_conflict_state
+    
     if not alert_flag:
         for p in people:
             if p.get("anomaly"):
@@ -550,7 +555,7 @@ def register():
     if request.method=="POST":
         email = request.form.get("email","").lower()
         pwd = request.form.get("password","")
-        confirm_pwd = request.form.get("confirm_password","") # 🔥 Check Confirm Password
+        confirm_pwd = request.form.get("confirm_password","") 
 
         if not email or not pwd or not confirm_pwd:
             flash("All fields are required.", "error")
